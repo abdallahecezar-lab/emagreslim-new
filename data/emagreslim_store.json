@@ -1,0 +1,181 @@
+{
+  "assessments": [
+    {
+      "id": "ASM-2026-0142",
+      "orderId": "ORD-2026-8810",
+      "assessmentNumber": 1,
+      "memberName": "Carlos Eduardo Mendes",
+      "email": "carlos.mendes@exemplo.com.br",
+      "status": "awaiting_review",
+      "submittedAt": "2026-11-16T01:39:02.190Z",
+      "slaDueAt": "2026-11-17T01:39:02.190Z",
+      "input": {
+        "journeyType": "new_profile",
+        "memberName": "Carlos Eduardo Mendes",
+        "email": "carlos.mendes@exemplo.com.br",
+        "emailConfirmed": true,
+        "age": 54,
+        "sex": "masculino",
+        "weightKg": 98,
+        "heightCm": 175,
+        "targetWeightKg": 85,
+        "freePrimaryBarrier": "condicao_clinica_medos",
+        "goalDescription": "Emagrecer com segurança e melhorar controle glicêmico.",
+        "deadlineEvent": "Retorno médico em 60 dias.",
+        "recentWeightChange": "inexplicada",
+        "healthConditions": [
+          "diabetes_tipo_2",
+          "hipertensao"
+        ],
+        "pregnantOrBreastfeeding": false,
+        "bariatricHistory": false,
+        "fluidRestriction": false,
+        "emergencySymptoms": false,
+        "medications": "Metformina 850mg + Insulina NPH noturna (não sei a dose exata da unidade atual)",
+        "unknownMedicationDose": true,
+        "allergies": "Camarão (urticária moderada)",
+        "allergySeverityUnknown": false,
+        "intolerances": "",
+        "dietaryPreference": "onivoro",
+        "wakeTime": "06:00",
+        "sleepTime": "22:30",
+        "shiftWorker": false,
+        "sleepQuality": "sono_fragmentado",
+        "exerciseType": "Caminhada leve 2x na semana",
+        "exerciseMinutesPerWeek": 60,
+        "workActivityLevel": "moderado_em_pe",
+        "waterIntakeLiters": 2,
+        "bowelFunction": "regular",
+        "mealLocations": [
+          "casa",
+          "restaurante_kg"
+        ],
+        "hasFridge": true,
+        "hasMicrowave": true,
+        "whoCooks": "conjuge",
+        "cookingTimeAvailable": "medio_30min",
+        "budgetPriority": false,
+        "preferredMealCount": 5,
+        "hungerPeakTime": "tarde_noite",
+        "hungerCauseContext": "Fome antes de dormir.",
+        "lossOfControlFrequency": "nunca_raramente",
+        "purgingOrCompensation": false,
+        "weekendChanges": "Churrasco em família aos domingos.",
+        "keepFoods": "Arroz, feijão, carnes grelhadas, salada, café sem açúcar.",
+        "avoidFoods": "Doces concentrados.",
+        "previousAttempts": "Dietas muito restritivas que causaram tontura e hipoglicemia.",
+        "whatWouldMakeHard": "Ficar muitas horas em jejum por causa da medicação.",
+        "firstWeekChange": "Regularizar horários do café da manhã e lanche da tarde."
+      },
+      "engineResult": {
+        "engineVersion": "emagreslim-engine-v0.6.0",
+        "eligibilityStatus": "awaiting_review",
+        "requiresReview": true,
+        "emergencyRedirect": false,
+        "triggers": [
+          {
+            "group": "Etapa de vida e antropometria",
+            "reason": "Mudança ponderal recente inexplicada exige investigação clínica."
+          },
+          {
+            "group": "Condições que modificam a prescrição",
+            "reason": "Condição(ões) declarada(s): Diabetes Tipo 2."
+          },
+          {
+            "group": "Medicamentos e controle metabólico",
+            "reason": "Medicamento com impacto metabólico/risco de hipoglicemia ou dose desconhecida."
+          }
+        ],
+        "anthropometry": {
+          "bmi": 32
+        },
+        "prescriptionBlocked": true,
+        "blockedMessage": "Prescrição calórica, proteica e cardápio bloqueados automaticamente até análise clínica do nutricionista responsável EmagreSLIM (prazo máximo: 24 horas corridas).",
+        "feasibilityProfile": [
+          {
+            "axis": "1. Tempo & Rotina",
+            "status": "Janelas Regulares",
+            "detail": "Acorda às 06:00 e dorme às 22:30."
+          },
+          {
+            "axis": "2. Acesso & Conservação",
+            "status": "Refrigeração disponível",
+            "detail": "Conservação refrigerada e aquecimento viáveis para marmitas."
+          },
+          {
+            "axis": "3. Custo & Orçamento",
+            "status": "Orçamento Padrão",
+            "detail": "Base brasileira acessível com proteínas variadas."
+          },
+          {
+            "axis": "4. Fome & Saciedade",
+            "status": "Pico tarde / noite",
+            "detail": "Fome antes de dormir."
+          },
+          {
+            "axis": "5. Preparo & Habilidade",
+            "status": "Preparo viável (até 30 min)",
+            "detail": "Responsável pelo preparo: Familiar / Terceiros."
+          },
+          {
+            "axis": "6. Preferências & Rejeições",
+            "status": "Cultura alimentar preservada",
+            "detail": "Mantidos: Arroz, feijão, carnes grelhadas, salada, café sem açúcar.. Excluídos: Doces concentrados.."
+          },
+          {
+            "axis": "7. Mudanças Aceitas (Semana 1)",
+            "status": "Acordo pactuado",
+            "detail": "Regularizar horários do café da manhã e lanche da tarde."
+          }
+        ],
+        "pan": {
+          "primaryBarrier": "Intervalo prolongado até o fim da tarde/turno concentrando fome intensa",
+          "secondaryBarriers": [
+            "Tentativas anteriores: \"Dietas muito restritivas que causaram tontura e hipoglicemia.\"",
+            "Fim de semana: \"Churrasco em família aos domingos.\""
+          ],
+          "memberEvidence": [
+            "Contexto da fome: \"Fome antes de dormir.\"",
+            "O que tornaria difícil: \"Ficar muitas horas em jejum por causa da medicação.\"",
+            "Acordo Semana 1: \"Regularizar horários do café da manhã e lanche da tarde.\""
+          ],
+          "methodInterventions": [
+            "Preservar alimentos culturalmente reconhecíveis (como arroz e feijão) em porções definidas.",
+            "Estruturar refeição intermediária cerca de 2h30 antes do pico habitual de fome.",
+            "Aplicar preparos simples e lista de substituições equivalentes por função nutricional.",
+            "Planejar flexibilidade social no fim de semana sem jejum compensatório."
+          ],
+          "needsClarificationCount": 0
+        },
+        "prescription": null
+      },
+      "clarifications": [],
+      "checkins": [],
+      "panConfirmedByMember": false,
+      "memberPanFeedback": ""
+    }
+  ],
+  "emailOutbox": [
+    {
+      "id": "EML-9001",
+      "idempotencyKey": "ASM-2026-0142:awaiting_review_24h",
+      "recipientEmail": "carlos.mendes@exemplo.com.br",
+      "memberName": "Carlos Eduardo Mendes",
+      "templateKey": "awaiting_review_24h",
+      "safeSubject": "EmagreSLIM — Recebemos sua avaliação (Análise do Nutricionista em até 24h)",
+      "deliveryStatus": "delivered",
+      "createdAt": "01:39",
+      "auditNote": "Canal exclusivo por e-mail · Sem dados clínicos no assunto"
+    }
+  ],
+  "gtmEvents": [
+    {
+      "id": "GTM-001",
+      "time": "22:39:02",
+      "eventName": "page_view_home",
+      "payload": "{\"path\":\"/\",\"whatsapp_collector\":false,\"clinical_status\":\"OMITTED\"}",
+      "audit": "OK — Conformidade LGPD/GTM-5THGKLB4 validada"
+    }
+  ],
+  "drafts": {}
+}

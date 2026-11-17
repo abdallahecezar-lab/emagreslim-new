@@ -1,0 +1,8 @@
+{
+  "name": "EmagreSLIM — Sistema Clínico e Operacional v0.6",
+  "description": "Plataforma clínica e operacional EmagreSLIM: Mapeamento Nutricional Gratuito, Avaliação Completa em 6 Blocos com Triagem Conservadora de Agravantes, Fila de Revisão 24h, Entrega Exclusiva por E-mail e Base TACO/IBGE.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
