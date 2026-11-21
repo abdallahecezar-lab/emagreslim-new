@@ -25,6 +25,15 @@ import {
   type StoreState
 } from './store.js';
 
+const PLAN_PRICE_BRL = 67.9;
+const CHAFIT_PRICE_BRL = 27.9;
+const CHAFIT_DOWNLOAD_URL = '/ebooks/EmagreSLIM_ChaFit_21D.pdf';
+const CHAFIT_FILE_NAME = 'EmagreSLIM_ChaFit_21D.pdf';
+
+function computeOrderTotalBrl(includeChaFit21D: boolean): number {
+  return includeChaFit21D ? Number((PLAN_PRICE_BRL + CHAFIT_PRICE_BRL).toFixed(2)) : PLAN_PRICE_BRL;
+}
+
 function getAdminPassword(): string {
   return process.env.ADMIN_PASSWORD?.trim() || 'emagreslim2026';
 }
@@ -407,6 +416,8 @@ export function createApiApp(): express.Express {
     const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
     const memberName =
       typeof req.body?.memberName === 'string' ? req.body.memberName.trim() : 'Membro';
+    const includeChaFit21D = req.body?.includeChaFit21D === true;
+    const totalAmountBrl = computeOrderTotalBrl(includeChaFit21D);
     const formData = req.body?.formData as AssessmentInput | undefined;
 
     if (!email || !email.includes('@')) {
@@ -418,6 +429,32 @@ export function createApiApp(): express.Express {
     const orderId = `ORD-2026-${Math.floor(1000 + Math.random() * 8999)}`;
     const mpToken = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim();
 
+    const checkoutItems: Array<{
+      id: string;
+      title: string;
+      quantity: number;
+      currency_id: string;
+      unit_price: number;
+    }> = [
+      {
+        id: 'emagreslim-avaliacao-completa',
+        title: 'EmagreSLIM — Avaliação Nutricional Completa & Plano Personalizado',
+        quantity: 1,
+        currency_id: 'BRL',
+        unit_price: PLAN_PRICE_BRL
+      }
+    ];
+
+    if (includeChaFit21D) {
+      checkoutItems.push({
+        id: 'emagreslim-chafit-21d',
+        title: 'CháFit 21D — Guia Digital de Chás e Hábitos para Sua Rotina (PDF)',
+        quantity: 1,
+        currency_id: 'BRL',
+        unit_price: CHAFIT_PRICE_BRL
+      });
+    }
+
     if (mpToken) {
       const baseUrl = resolvePublicBaseUrl(req);
       try {
@@ -428,15 +465,7 @@ export function createApiApp(): express.Express {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            items: [
-              {
-                id: 'emagreslim-avaliacao-completa',
-                title: 'EmagreSLIM — Avaliação Nutricional Completa & Plano Personalizado',
-                quantity: 1,
-                currency_id: 'BRL',
-                unit_price: 67.9
-              }
-            ],
+            items: checkoutItems,
             payer: {
               name: memberName,
               email
@@ -473,6 +502,9 @@ export function createApiApp(): express.Express {
           memberName,
           emailConfirmed: false,
           paymentStatus: 'pending',
+          includeChaFit21D,
+          totalAmountBrl,
+          upsellPaymentStatus: includeChaFit21D ? 'none' : 'none',
           mpPreferenceId: mpData.id,
           formData,
           updatedAt: new Date().toISOString()
@@ -481,13 +513,16 @@ export function createApiApp(): express.Express {
         recordSanitizedGtmEvent(state, 'begin_checkout', {
           order_id: orderId,
           gateway: 'mercadopago',
-          amount_brl: 67.9
+          amount_brl: totalAmountBrl,
+          include_chafit_21d: includeChaFit21D
         });
         await saveStore(state);
 
         res.json({
           mode: 'mercadopago',
           orderId,
+          includeChaFit21D,
+          totalAmountBrl,
           checkoutUrl: mpData.init_point,
           sandboxUrl: mpData.sandbox_init_point
         });
@@ -506,6 +541,9 @@ export function createApiApp(): express.Express {
       memberName,
       emailConfirmed: false,
       paymentStatus: 'approved',
+      includeChaFit21D,
+      totalAmountBrl,
+      upsellPaymentStatus: 'none',
       formData,
       updatedAt: new Date().toISOString()
     };
@@ -513,7 +551,8 @@ export function createApiApp(): express.Express {
     recordSanitizedGtmEvent(state, 'paid_assessment_purchased', {
       order_id: orderId,
       gateway: 'demo_preview',
-      amount_brl: 67.9
+      amount_brl: totalAmountBrl,
+      include_chafit_21d: includeChaFit21D
     });
     await enqueueIdempotentEmail(state, {
       idempotencyKey: `purchase:${orderId}`,
@@ -524,7 +563,13 @@ export function createApiApp(): express.Express {
     });
 
     await saveStore(state);
-    res.json({ mode: 'demo_approved', orderId, emailConfirmed: false });
+    res.json({
+      mode: 'demo_approved',
+      orderId,
+      includeChaFit21D,
+      totalAmountBrl,
+      emailConfirmed: false
+    });
   });
 
   app.get('/api/checkout/verify', async (req, res) => {
@@ -543,6 +588,12 @@ export function createApiApp(): express.Express {
       return;
     }
 
+    const includeChaFit21D = Boolean(draft.includeChaFit21D);
+    const totalAmountBrl =
+      typeof draft.totalAmountBrl === 'number'
+        ? draft.totalAmountBrl
+        : computeOrderTotalBrl(includeChaFit21D);
+
     if (draft.paymentStatus === 'approved') {
       res.json({
         approved: true,
@@ -550,6 +601,8 @@ export function createApiApp(): express.Express {
         email: draft.email,
         memberName: draft.memberName,
         emailConfirmed: draft.emailConfirmed,
+        includeChaFit21D,
+        totalAmountBrl,
         formData: draft.formData
       });
       return;
@@ -575,7 +628,8 @@ export function createApiApp(): express.Express {
       recordSanitizedGtmEvent(state, 'paid_assessment_purchased', {
         order_id: orderId,
         gateway: 'mercadopago',
-        amount_brl: 67.9
+        amount_brl: totalAmountBrl,
+        include_chafit_21d: includeChaFit21D
       });
       await enqueueIdempotentEmail(state, {
         idempotencyKey: `purchase:${orderId}`,
@@ -592,6 +646,8 @@ export function createApiApp(): express.Express {
         email: draft.email,
         memberName: draft.memberName,
         emailConfirmed: draft.emailConfirmed,
+        includeChaFit21D,
+        totalAmountBrl,
         formData: draft.formData
       });
       return;
@@ -600,6 +656,301 @@ export function createApiApp(): express.Express {
     res.json({
       approved: false,
       status: check.status || draft.paymentStatus
+    });
+  });
+
+  app.post('/api/checkout/upsell-chafit', async (req, res) => {
+    const orderId = typeof req.body?.orderId === 'string' ? req.body.orderId.trim() : '';
+    const assessmentId =
+      typeof req.body?.assessmentId === 'string' ? req.body.assessmentId.trim() : '';
+
+    if (!orderId && !assessmentId) {
+      res.status(400).json({ error: 'Pedido ou avaliação obrigatórios para adicionar o CháFit 21D.' });
+      return;
+    }
+
+    const state = await loadStore();
+    const assessment = assessmentId
+      ? state.assessments.find(a => a.id === assessmentId)
+      : state.assessments.find(a => a.orderId === orderId);
+    const resolvedOrderId = assessment?.orderId || orderId;
+    const draft = resolvedOrderId ? state.drafts[resolvedOrderId] : undefined;
+
+    if (!assessment && (!draft || draft.paymentStatus !== 'approved')) {
+      res.status(403).json({ error: 'Pedido principal ainda não aprovado para adicionar complemento.' });
+      return;
+    }
+
+    if (assessment?.includeChaFit21D || draft?.includeChaFit21D) {
+      res.json({
+        mode: 'already_owned',
+        orderId: resolvedOrderId,
+        assessmentId: assessment?.id,
+        includeChaFit21D: true,
+        record: assessment || null
+      });
+      return;
+    }
+
+    const email = assessment?.email || draft?.email || '';
+    const memberName = assessment?.memberName || draft?.memberName || 'Membro';
+    const mpToken = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim();
+    const upsellRef = `${resolvedOrderId}:CHAFIT`;
+
+    if (mpToken) {
+      const baseUrl = resolvePublicBaseUrl(req);
+      try {
+        const mpRes = await fetch('https://api.mercadopago.com/checkout/preferences', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${mpToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            items: [
+              {
+                id: 'emagreslim-chafit-21d-upsell',
+                title: 'CháFit 21D — Guia Digital de Chás e Hábitos para Sua Rotina (PDF)',
+                quantity: 1,
+                currency_id: 'BRL',
+                unit_price: CHAFIT_PRICE_BRL
+              }
+            ],
+            payer: {
+              name: memberName,
+              email
+            },
+            external_reference: upsellRef,
+            back_urls: {
+              success: `${baseUrl}/?mp_upsell_status=approved&order_id=${encodeURIComponent(
+                resolvedOrderId
+              )}&assessment_id=${encodeURIComponent(assessment?.id || '')}`,
+              pending: `${baseUrl}/?mp_upsell_status=pending&order_id=${encodeURIComponent(
+                resolvedOrderId
+              )}&assessment_id=${encodeURIComponent(assessment?.id || '')}`,
+              failure: `${baseUrl}/?mp_upsell_status=failure&order_id=${encodeURIComponent(
+                resolvedOrderId
+              )}&assessment_id=${encodeURIComponent(assessment?.id || '')}`
+            },
+            auto_return: 'approved',
+            notification_url: `${baseUrl}/api/webhooks/mercadopago`,
+            statement_descriptor: 'EMAGRESLIM'
+          })
+        });
+
+        const mpData = (await mpRes.json()) as {
+          id?: string;
+          init_point?: string;
+          message?: string;
+        };
+
+        if (!mpRes.ok || !mpData.init_point) {
+          res.status(502).json({
+            error: mpData.message || 'Erro ao iniciar pagamento complementar no Mercado Pago.'
+          });
+          return;
+        }
+
+        if (draft) {
+          draft.upsellPaymentStatus = 'pending';
+          draft.upsellMpPreferenceId = mpData.id;
+          draft.updatedAt = new Date().toISOString();
+        } else {
+          state.drafts[resolvedOrderId] = {
+            orderId: resolvedOrderId,
+            email,
+            memberName,
+            emailConfirmed: true,
+            paymentStatus: 'approved',
+            includeChaFit21D: false,
+            totalAmountBrl: PLAN_PRICE_BRL,
+            upsellPaymentStatus: 'pending',
+            upsellMpPreferenceId: mpData.id,
+            updatedAt: new Date().toISOString()
+          };
+        }
+
+        recordSanitizedGtmEvent(state, 'begin_upsell_chafit', {
+          order_id: resolvedOrderId,
+          amount_brl: CHAFIT_PRICE_BRL,
+          gateway: 'mercadopago'
+        });
+        await saveStore(state);
+
+        res.json({
+          mode: 'mercadopago',
+          orderId: resolvedOrderId,
+          assessmentId: assessment?.id,
+          amountBrl: CHAFIT_PRICE_BRL,
+          checkoutUrl: mpData.init_point
+        });
+        return;
+      } catch (err) {
+        console.error('Mercado Pago upsell preference error:', err);
+        res.status(502).json({ error: 'Falha de comunicação com o Mercado Pago.' });
+        return;
+      }
+    }
+
+    // Modo preview/demo sem token MP
+    if (draft) {
+      draft.includeChaFit21D = true;
+      draft.upsellPaymentStatus = 'approved';
+      draft.totalAmountBrl = computeOrderTotalBrl(true);
+      draft.updatedAt = new Date().toISOString();
+    } else {
+      state.drafts[resolvedOrderId] = {
+        orderId: resolvedOrderId,
+        email,
+        memberName,
+        emailConfirmed: true,
+        paymentStatus: 'approved',
+        includeChaFit21D: true,
+        totalAmountBrl: computeOrderTotalBrl(true),
+        upsellPaymentStatus: 'approved',
+        updatedAt: new Date().toISOString()
+      };
+    }
+
+    if (assessment) {
+      assessment.includeChaFit21D = true;
+      assessment.totalAmountBrl = computeOrderTotalBrl(true);
+    }
+
+    recordSanitizedGtmEvent(state, 'upsell_chafit_purchased', {
+      order_id: resolvedOrderId,
+      gateway: 'demo_preview',
+      amount_brl: CHAFIT_PRICE_BRL
+    });
+    await saveStore(state);
+
+    res.json({
+      mode: 'demo_approved',
+      orderId: resolvedOrderId,
+      assessmentId: assessment?.id,
+      includeChaFit21D: true,
+      amountBrl: CHAFIT_PRICE_BRL,
+      record: assessment || null
+    });
+  });
+
+  app.get('/api/checkout/upsell-verify', async (req, res) => {
+    const orderId = typeof req.query.orderId === 'string' ? req.query.orderId.trim() : '';
+    const assessmentId =
+      typeof req.query.assessmentId === 'string' ? req.query.assessmentId.trim() : '';
+    const paymentId = typeof req.query.paymentId === 'string' ? req.query.paymentId.trim() : '';
+
+    if (!orderId) {
+      res.status(400).json({ error: 'orderId obrigatório.' });
+      return;
+    }
+
+    const state = await loadStore();
+    const draft = state.drafts[orderId];
+    const assessment =
+      (assessmentId ? state.assessments.find(a => a.id === assessmentId) : undefined) ||
+      state.assessments.find(a => a.orderId === orderId);
+
+    if (draft?.includeChaFit21D || assessment?.includeChaFit21D) {
+      res.json({
+        approved: true,
+        orderId,
+        includeChaFit21D: true,
+        amountBrl: CHAFIT_PRICE_BRL,
+        record: assessment || null
+      });
+      return;
+    }
+
+    const mpToken = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim();
+    if (!mpToken) {
+      res.json({ approved: false, status: draft?.upsellPaymentStatus || 'pending' });
+      return;
+    }
+
+    const check = await fetchMercadoPagoPaymentStatus({
+      accessToken: mpToken,
+      paymentId: paymentId || undefined,
+      orderId: `${orderId}:CHAFIT`
+    });
+
+    if (check.approved) {
+      if (draft) {
+        draft.includeChaFit21D = true;
+        draft.upsellPaymentStatus = 'approved';
+        draft.upsellMpPaymentId = check.mpPaymentId;
+        draft.totalAmountBrl = computeOrderTotalBrl(true);
+        draft.updatedAt = new Date().toISOString();
+      }
+      if (assessment) {
+        assessment.includeChaFit21D = true;
+        assessment.totalAmountBrl = computeOrderTotalBrl(true);
+      }
+      recordSanitizedGtmEvent(state, 'upsell_chafit_purchased', {
+        order_id: orderId,
+        gateway: 'mercadopago',
+        amount_brl: CHAFIT_PRICE_BRL
+      });
+      await saveStore(state);
+
+      res.json({
+        approved: true,
+        orderId,
+        includeChaFit21D: true,
+        amountBrl: CHAFIT_PRICE_BRL,
+        record: assessment || null
+      });
+      return;
+    }
+
+    res.json({
+      approved: false,
+      status: check.status || draft?.upsellPaymentStatus || 'pending'
+    });
+  });
+
+  app.get('/api/ebooks/chafit-21d/access', async (req, res) => {
+    const orderId = typeof req.query.orderId === 'string' ? req.query.orderId.trim() : '';
+    const assessmentId =
+      typeof req.query.assessmentId === 'string' ? req.query.assessmentId.trim() : '';
+
+    if (!orderId && !assessmentId) {
+      res.status(403).json({
+        allowed: false,
+        error: 'Acesso restrito a clientes que adquiriram o guia CháFit 21D.'
+      });
+      return;
+    }
+
+    const state = await loadStore();
+    const draft = orderId ? state.drafts[orderId] : undefined;
+    const assessment =
+      (assessmentId ? state.assessments.find(a => a.id === assessmentId) : undefined) ||
+      (orderId ? state.assessments.find(a => a.orderId === orderId) : undefined);
+
+    const hasDraftEntitlement =
+      Boolean(draft) &&
+      draft!.paymentStatus === 'approved' &&
+      Boolean(draft!.includeChaFit21D);
+    const hasAssessmentEntitlement = Boolean(assessment?.includeChaFit21D);
+
+    if (!hasDraftEntitlement && !hasAssessmentEntitlement) {
+      res.status(403).json({
+        allowed: false,
+        error: 'O guia CháFit 21D ainda não foi liberado para este pedido.'
+      });
+      return;
+    }
+
+    recordSanitizedGtmEvent(state, 'chafit_ebook_downloaded', {
+      order_id: orderId || assessment?.orderId || 'unknown'
+    });
+    await saveStore(state);
+
+    res.json({
+      allowed: true,
+      downloadUrl: CHAFIT_DOWNLOAD_URL,
+      fileName: CHAFIT_FILE_NAME
     });
   });
 
@@ -624,28 +975,64 @@ export function createApiApp(): express.Express {
           status?: string;
           external_reference?: string;
         };
-        const orderId = payment.external_reference;
-        if (orderId && payment.status === 'approved') {
+        const extRef = payment.external_reference;
+        if (extRef && payment.status === 'approved') {
           const state = await loadStore();
-          const draft = state.drafts[orderId];
-          if (draft && draft.paymentStatus !== 'approved') {
-            draft.paymentStatus = 'approved';
-            draft.mpPaymentId = paymentId;
-            draft.updatedAt = new Date().toISOString();
 
-            recordSanitizedGtmEvent(state, 'paid_assessment_purchased', {
-              order_id: orderId,
-              gateway: 'mercadopago_webhook',
-              amount_brl: 67.9
-            });
-            await enqueueIdempotentEmail(state, {
-              idempotencyKey: `purchase:${orderId}`,
-              recipientEmail: draft.email,
-              memberName: draft.memberName,
-              templateKey: 'purchase_confirmed',
-              assessmentNumber: 1
-            });
-            await saveStore(state);
+          if (extRef.endsWith(':CHAFIT')) {
+            const baseOrderId = extRef.slice(0, -':CHAFIT'.length);
+            const draft = state.drafts[baseOrderId];
+            const assessment = state.assessments.find(a => a.orderId === baseOrderId);
+            const alreadyUnlocked =
+              draft?.upsellPaymentStatus === 'approved' || Boolean(assessment?.includeChaFit21D);
+
+            if (!alreadyUnlocked) {
+              if (draft) {
+                draft.includeChaFit21D = true;
+                draft.upsellPaymentStatus = 'approved';
+                draft.upsellMpPaymentId = paymentId;
+                draft.totalAmountBrl = computeOrderTotalBrl(true);
+                draft.updatedAt = new Date().toISOString();
+              }
+              if (assessment) {
+                assessment.includeChaFit21D = true;
+                assessment.totalAmountBrl = computeOrderTotalBrl(true);
+              }
+              recordSanitizedGtmEvent(state, 'upsell_chafit_purchased', {
+                order_id: baseOrderId,
+                gateway: 'mercadopago_webhook',
+                amount_brl: CHAFIT_PRICE_BRL
+              });
+              await saveStore(state);
+            }
+          } else {
+            const draft = state.drafts[extRef];
+            if (draft && draft.paymentStatus !== 'approved') {
+              const includeChaFit21D = Boolean(draft.includeChaFit21D);
+              const totalAmountBrl =
+                typeof draft.totalAmountBrl === 'number'
+                  ? draft.totalAmountBrl
+                  : computeOrderTotalBrl(includeChaFit21D);
+
+              draft.paymentStatus = 'approved';
+              draft.mpPaymentId = paymentId;
+              draft.updatedAt = new Date().toISOString();
+
+              recordSanitizedGtmEvent(state, 'paid_assessment_purchased', {
+                order_id: extRef,
+                gateway: 'mercadopago_webhook',
+                amount_brl: totalAmountBrl,
+                include_chafit_21d: includeChaFit21D
+              });
+              await enqueueIdempotentEmail(state, {
+                idempotencyKey: `purchase:${extRef}`,
+                recipientEmail: draft.email,
+                memberName: draft.memberName,
+                templateKey: 'purchase_confirmed',
+                assessmentNumber: 1
+              });
+              await saveStore(state);
+            }
           }
         }
       }
@@ -672,6 +1059,11 @@ export function createApiApp(): express.Express {
         memberName: prev?.memberName || 'Membro',
         emailConfirmed: true,
         paymentStatus: prev?.paymentStatus || 'approved',
+        includeChaFit21D: prev?.includeChaFit21D ?? false,
+        totalAmountBrl: prev?.totalAmountBrl ?? PLAN_PRICE_BRL,
+        upsellPaymentStatus: prev?.upsellPaymentStatus ?? 'none',
+        upsellMpPreferenceId: prev?.upsellMpPreferenceId,
+        upsellMpPaymentId: prev?.upsellMpPaymentId,
         mpPreferenceId: prev?.mpPreferenceId,
         mpPaymentId: prev?.mpPaymentId,
         formData: prev?.formData,
@@ -745,6 +1137,13 @@ export function createApiApp(): express.Express {
         ? 'awaiting_review'
         : 'completed';
 
+    const draftForOrder = state.drafts[orderId];
+    const includeChaFit21D = Boolean(draftForOrder?.includeChaFit21D);
+    const totalAmountBrl =
+      typeof draftForOrder?.totalAmountBrl === 'number'
+        ? draftForOrder.totalAmountBrl
+        : computeOrderTotalBrl(includeChaFit21D);
+
     const record: AssessmentRecord = {
       id: newId,
       orderId,
@@ -759,13 +1158,16 @@ export function createApiApp(): express.Express {
       clarifications: [],
       checkins: [],
       panConfirmedByMember: false,
-      memberPanFeedback: ''
+      memberPanFeedback: '',
+      includeChaFit21D,
+      totalAmountBrl
     };
 
     state.assessments.unshift(record);
     recordSanitizedGtmEvent(state, 'paid_assessment_submitted', {
       assessment_id: newId,
-      assessment_number: assessmentNumber
+      assessment_number: assessmentNumber,
+      include_chafit_21d: includeChaFit21D
     });
 
     if (evaluation.requiresReview && !evaluation.emergencyRedirect) {

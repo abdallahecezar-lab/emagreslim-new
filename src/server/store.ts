@@ -18,8 +18,13 @@ export interface OrderDraft {
   memberName: string;
   emailConfirmed: boolean;
   paymentStatus: 'pending' | 'approved' | 'rejected';
+  includeChaFit21D?: boolean;
+  totalAmountBrl?: number;
   mpPreferenceId?: string;
   mpPaymentId?: string;
+  upsellPaymentStatus?: 'none' | 'pending' | 'approved' | 'rejected';
+  upsellMpPreferenceId?: string;
+  upsellMpPaymentId?: string;
   formData?: AssessmentInput;
   updatedAt: string;
 }
