@@ -1,6 +1,11 @@
 import { jsPDF } from 'jspdf';
 import emagreslimLogo from '../assets/images/emagreslim-logo.png';
 import type { FreeMappingAnalysis } from '../shared/clinicalEngine';
+import {
+  buildCompleteSubstitutionCatalog,
+  buildRichMealSheets,
+  type FoodBandTone
+} from '../shared/mealBuilder';
 import type { AssessmentInput, AssessmentRecord } from '../shared/types';
 
 let cachedLogoDataUrl: string | null = null;
@@ -22,23 +27,6 @@ if (typeof window !== 'undefined' && typeof Image !== 'undefined') {
     }
   };
   img.src = emagreslimLogo;
-}
-
-function formatHalfMeasurePdf(householdMeasure: string, portionGrams: number): string {
-  const clean = householdMeasure.replace(/\s*\([^)]*IBGE[^)]*\)/gi, '').trim();
-  const halfGrams = Math.round(portionGrams / 2);
-
-  if (clean.startsWith('4 colheres de sopa')) return `2 colheres de sopa (${halfGrams}g)`;
-  if (clean.startsWith('2 colheres de sopa')) return `1 colher de sopa (${halfGrams}g)`;
-  if (clean.startsWith('1 colher de sopa')) return `1/2 colher de sopa (${halfGrams}g)`;
-  if (clean.startsWith('2 unidades médias')) return `1 unidade média (${halfGrams}g)`;
-  if (clean.startsWith('1 unidade média')) return `1/2 unidade média (${halfGrams}g)`;
-  if (clean.startsWith('1 filé médio')) return `1/2 filé médio (${halfGrams}g)`;
-  if (clean.startsWith('1 concha')) return `1/2 concha (${halfGrams}g)`;
-  if (clean.startsWith('1 lata pequena')) return `1/2 lata pequena (${halfGrams}g)`;
-  if (clean.startsWith('1 copo americano')) return `1/2 copo americano (${halfGrams} ml)`;
-  if (clean.startsWith('1 fatia média / 4 colheres de sopa')) return `2 colheres de sopa (${halfGrams}g)`;
-  return `Metade da porção (${halfGrams}g)`;
 }
 
 function createHiDpiCanvas(logicalW: number, logicalH: number, scale = 3): {
@@ -981,6 +969,53 @@ export function exportFreeMappingPdf(
   doc.save(`EmagreSLIM_Mapeamento_${safeName || 'Inicial'}.pdf`);
 }
 
+function measureWrappedLines(
+  doc: jsPDF,
+  text: string,
+  maxWidthMm: number,
+  fontStyle: 'normal' | 'bold' = 'normal',
+  fontSize = 9
+): string[] {
+  doc.setFont('helvetica', fontStyle);
+  doc.setFontSize(fontSize);
+  return doc.splitTextToSize(text, maxWidthMm) as string[];
+}
+
+const PDF_BAND_PALETTE: Record<
+  FoodBandTone,
+  {
+    headerRgb: [number, number, number];
+    bodyRgb: [number, number, number];
+    borderRgb: [number, number, number];
+  }
+> = {
+  forest: {
+    headerRgb: [3, 66, 42],
+    bodyRgb: [236, 253, 245],
+    borderRgb: [167, 243, 208]
+  },
+  green: {
+    headerRgb: [101, 163, 13],
+    bodyRgb: [247, 254, 231],
+    borderRgb: [190, 242, 100]
+  },
+  red: {
+    headerRgb: [185, 28, 28],
+    bodyRgb: [254, 242, 242],
+    borderRgb: [254, 202, 202]
+  },
+  blue: {
+    headerRgb: [3, 105, 161],
+    bodyRgb: [240, 249, 255],
+    borderRgb: [186, 230, 253]
+  },
+  slate: {
+    headerRgb: [87, 83, 78],
+    bodyRgb: [245, 245, 244],
+    borderRgb: [214, 211, 209]
+  }
+};
+
 export function exportAssessmentPlanPdf(evaluation: AssessmentRecord): void {
   const { prescription, pan, feasibilityProfile, reviewedBy, reviewedByCrn } = evaluation.engineResult;
   if (!prescription) return;
@@ -988,25 +1023,28 @@ export function exportAssessmentPlanPdf(evaluation: AssessmentRecord): void {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
-  const margin = 16;
+  const margin = 14;
   const maxWidth = pageWidth - margin * 2;
+  const bottomLimit = pageHeight - 17;
   let y = 18;
 
-  const startNewPage = (subtitle: string) => {
+  const startSubPage = (subtitle: string) => {
     doc.addPage();
     paintWarmPageBackground(doc);
     doc.setFillColor(3, 66, 42);
-    doc.rect(0, 0, pageWidth, 14, 'F');
+    doc.rect(0, 0, pageWidth, 13, 'F');
+    doc.setFillColor(115, 175, 4);
+    doc.rect(0, 13, pageWidth, 1.2, 'F');
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9.5);
+    doc.setFontSize(9);
     doc.setTextColor(255, 255, 255);
-    doc.text(`EmagreSLIM · ${subtitle} · ${evaluation.memberName}`, margin, 9);
-    y = 22;
+    doc.text(`EmagreSLIM · ${subtitle} · ${evaluation.memberName}`, margin, 8.6);
+    y = 20;
   };
 
   const ensureSpace = (neededMm: number, subtitle = 'Plano Alimentar & PAN') => {
-    if (y + neededMm > pageHeight - 18) {
-      startNewPage(subtitle);
+    if (y + neededMm > bottomLimit) {
+      startSubPage(subtitle);
     }
   };
 
@@ -1021,77 +1059,99 @@ export function exportAssessmentPlanPdf(evaluation: AssessmentRecord): void {
     `Membro: ${evaluation.memberName} (${evaluation.email})  |  Registro: ${evaluation.id}  |  Avaliação #${evaluation.assessmentNumber}`,
     reviewedBy
       ? `Validado clinicamente por ${reviewedBy} (${reviewedByCrn || 'CRN'})`
-      : 'Nutrição Baseada em Evidências · Mifflin-St Jeor (1990) · DRI (2023) · TACO 4ª ed. / IBGE'
+      : 'Nutrição Baseada em Evidências · Alto Volume de Folhas, Verduras e Frutas Variadas · TACO / IBGE'
   );
 
   y = 48;
 
-  // 4 Cartões de Metas Nutricionais
-  const gap = 4;
+  const gap = 3.5;
   const cardW = (maxWidth - gap * 3) / 4;
   const kpis = [
-    { label: 'META CALÓRICA', value: `${prescription.targetKcal} kcal/dia`, sub: `TDEE: ${prescription.tdeeKcal} kcal`, accent: true },
-    { label: 'PROTEÍNA PROTETORA', value: `${prescription.macros.proteinG}g / dia`, sub: `${prescription.macros.proteinPerKg} g/kg massa`, accent: true },
-    { label: 'CARBOIDRATOS / GORD.', value: `${prescription.macros.carbsG}g / ${prescription.macros.fatG}g`, sub: 'Energia equilibrada', accent: false },
-    { label: 'META DE ÁGUA', value: `${(prescription.waterTargetMl / 1000).toFixed(1)} L/dia`, sub: `${Math.round(prescription.waterTargetMl / 250)} copos de 250 ml`, accent: false }
+    {
+      label: 'META CALÓRICA',
+      value: `${prescription.targetKcal} kcal/dia`,
+      sub: `TDEE: ${prescription.tdeeKcal} kcal`,
+      accent: true
+    },
+    {
+      label: 'PROTEÍNA PROTETORA',
+      value: `${prescription.macros.proteinG}g / dia`,
+      sub: `${prescription.macros.proteinPerKg} g/kg massa`,
+      accent: true
+    },
+    {
+      label: 'CARBO / GORDURA',
+      value: `${prescription.macros.carbsG}g / ${prescription.macros.fatG}g`,
+      sub: 'Energia equilibrada',
+      accent: false
+    },
+    {
+      label: 'META DE ÁGUA',
+      value: `${(prescription.waterTargetMl / 1000).toFixed(1)} L/dia`,
+      sub: `${Math.round(prescription.waterTargetMl / 250)} copos de 250 ml`,
+      accent: false
+    }
   ];
 
   kpis.forEach((k, idx) => {
     const cx = margin + idx * (cardW + gap);
     doc.setFillColor(k.accent ? 236 : 255, k.accent ? 253 : 255, k.accent ? 245 : 255);
     doc.setDrawColor(k.accent ? 167 : 231, k.accent ? 243 : 229, k.accent ? 208 : 228);
-    doc.roundedRect(cx, y, cardW, 25, 3, 3, 'FD');
+    doc.roundedRect(cx, y, cardW, 24, 3, 3, 'FD');
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7);
+    doc.setFontSize(6.8);
     doc.setTextColor(k.accent ? 3 : 120, k.accent ? 66 : 113, k.accent ? 42 : 108);
-    doc.text(k.label, cx + 3.5, y + 6.5);
+    doc.text(k.label, cx + 3.2, y + 6.2);
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
+    doc.setFontSize(10.8);
     doc.setTextColor(k.accent ? 3 : 28, k.accent ? 66 : 25, k.accent ? 42 : 23);
-    doc.text(k.value, cx + 3.5, y + 14.5);
+    doc.text(k.value, cx + 3.2, y + 14);
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.6);
+    doc.setFontSize(7.4);
     doc.setTextColor(87, 83, 78);
-    doc.text(k.sub, cx + 3.5, y + 20.5);
+    doc.text(k.sub, cx + 3.2, y + 20);
   });
 
-  y += 30;
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
+  y += 28.5;
+  const eqLines = measureWrappedLines(doc, `Memorial energético: ${prescription.equationUsed}`, maxWidth, 'normal', 8.2);
   doc.setTextColor(87, 83, 78);
-  doc.text(`Memorial energético: ${prescription.equationUsed}`, margin, y);
-  y += 6;
+  doc.text(eqLines, margin, y);
+  y += eqLines.length * 4 + 3;
 
-  // Ilustração: Regra da Porção Inteira vs Regra da Metade
+  // Ilustração: Regra da Porção Inteira vs Mix por Classes
   const platePng = renderPlateSplitRulePng();
   if (platePng) {
     doc.addImage(platePng, 'PNG', margin, y, maxWidth, 42);
-    y += 48;
+    y += 46;
   }
 
   // Ilustração: Massa Magra
-  const leanPng = renderLeanMassIllustrationPng(`Aporte proteico de ${prescription.macros.proteinG}g/dia protege sua massa magra`);
+  const leanPng = renderLeanMassIllustrationPng(
+    `Aporte proteico de ${prescription.macros.proteinG}g/dia protege sua massa magra`
+  );
   if (leanPng) {
-    doc.addImage(leanPng, 'PNG', margin, y, maxWidth, 55);
-    y += 61;
+    doc.addImage(leanPng, 'PNG', margin, y, maxWidth, 54);
+    y += 58;
   }
 
   // Ilustração ou Nota de Hidratação
   if (evaluation.input.fluidRestriction) {
+    const noteLines = measureWrappedLines(
+      doc,
+      'Restrição hídrica clínica declarada: siga exclusivamente o volume de líquidos liberado na revisão individual.',
+      maxWidth - 12,
+      'bold',
+      9
+    );
+    const boxH = 10 + noteLines.length * 4.5;
     doc.setFillColor(255, 251, 235);
     doc.setDrawColor(253, 230, 138);
-    doc.roundedRect(margin, y, maxWidth, 24, 3, 3, 'FD');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9.5);
+    doc.roundedRect(margin, y, maxWidth, boxH, 3, 3, 'FD');
     doc.setTextColor(146, 64, 14);
-    doc.text(
-      'Restrição hídrica clínica declarada: siga exclusivamente o volume de líquidos liberado na revisão individual.',
-      margin + 6,
-      y + 13
-    );
+    doc.text(noteLines, margin + 6, y + 7);
   } else {
     const waterPng = renderWaterHydrationPng({
       idealWaterMl: prescription.waterTargetMl,
@@ -1102,208 +1162,432 @@ export function exportAssessmentPlanPdf(evaluation: AssessmentRecord): void {
     }
   }
 
-  // ===================== PÁGINA 2+ — CARDÁPIO EM CARTÕES ESPAÇOSOS =====================
-  const meals = prescription.meals || [];
-  startNewPage(`Cardápio Individualizado (${meals.length} refeições)`);
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13.5);
-  doc.setTextColor(3, 66, 42);
-  doc.text(`Seu Plano Alimentar em ${meals.length} Refeições (${prescription.targetKcal} kcal/dia)`, margin, y);
-  y += 7;
-
+  // ===================== PÁGINAS DE REFEIÇÕES — 1 FICHA IMPECÁVEL POR REFEIÇÃO =====================
   if (prescription.manualPlanText) {
-    const manualLines = doc.splitTextToSize(prescription.manualPlanText, maxWidth - 12) as string[];
-    const h = 14 + manualLines.length * 4.8;
-    doc.setFillColor(255, 255, 255);
-    doc.setDrawColor(231, 229, 228);
-    doc.roundedRect(margin, y, maxWidth, h, 3, 3, 'FD');
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9.5);
-    doc.setTextColor(41, 37, 36);
-    doc.text(manualLines, margin + 6, y + 8);
-    y += h + 6;
-  } else {
-    meals.forEach((meal, idx) => {
-      const slots = meal.slots && meal.slots.length > 0
-        ? meal.slots
-        : meal.items.map((item, sIdx) => ({
-            roleLabel: `Item ${sIdx + 1}`,
-            primary: item,
-            swapOptions: []
-          }));
-
-      // Calcula altura aproximada do cartão da refeição para não quebrar feio no meio
-      let estimatedHeight = 18;
-      slots.forEach(slot => {
-        const mainText = `Passo: ${slot.primary.name} — 100%: ${slot.primary.householdMeasure} (${slot.primary.portionGrams}g | ${slot.primary.kcal} kcal)`;
-        const mainLines = doc.splitTextToSize(mainText, maxWidth - 14) as string[];
-        estimatedHeight += mainLines.length * 4.4 + 4;
-        if (slot.swapOptions.length > 0) {
-          const swapStr = slot.swapOptions
-            .map(
-              alt =>
-                `${alt.name} [100%: ${alt.householdMeasure} | se misturar: ${formatHalfMeasurePdf(alt.householdMeasure, alt.portionGrams)}]`
-            )
-            .join(' OU ');
-          const swapText = `Se misturar 2 opções: ${formatHalfMeasurePdf(slot.primary.householdMeasure, slot.primary.portionGrams)} + metade de: ${swapStr}`;
-          const swapLines = doc.splitTextToSize(swapText, maxWidth - 18) as string[];
-          estimatedHeight += swapLines.length * 4.1 + 5;
-        }
-      });
-
-      ensureSpace(Math.min(estimatedHeight, 120), `Cardápio (${meals.length} refeições)`);
-
-      const mealKcal = meal.items.reduce((acc, f) => acc + f.kcal, 0);
-      const mealProt = meal.items.reduce((acc, f) => acc + f.protein_g, 0);
-
-      // Cartão branco da refeição
-      doc.setFillColor(255, 255, 255);
-      doc.setDrawColor(214, 211, 209);
-      doc.roundedRect(margin, y, maxWidth, estimatedHeight, 3.5, 3.5, 'FD');
-
-      // Cabeçalho suave esmeralda dentro do cartão
-      doc.setFillColor(236, 253, 245);
-      doc.roundedRect(margin + 0.3, y + 0.3, maxWidth - 0.6, 11, 3, 3, 'F');
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(10.5);
-      doc.setTextColor(3, 66, 42);
-      doc.text(`Refeição 0${idx + 1}: ${meal.name} (${meal.suggestedWindow})`, margin + 5, y + 7.2);
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8.5);
-      doc.setTextColor(87, 83, 78);
-      doc.text(`${mealKcal} kcal | ${mealProt.toFixed(1)}g proteína`, pageWidth - margin - 5, y + 7.2, {
-        align: 'right'
-      });
-
-      let innerY = y + 16.5;
-
-      slots.forEach((slot, sIdx) => {
-        const f = slot.primary;
-        const mainText = `Passo ${sIdx + 1} (${slot.roleLabel}): ${f.name} — 100%: ${f.householdMeasure} (${f.portionGrams}g | ${f.kcal} kcal | ${f.source} ${f.sourceCode})`;
-        const mainLines = doc.splitTextToSize(mainText, maxWidth - 14) as string[];
-
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(9.2);
-        doc.setTextColor(28, 25, 23);
-        doc.text(mainLines, margin + 6, innerY);
-        innerY += mainLines.length * 4.4 + 1.5;
-
-        if (slot.swapOptions.length > 0) {
-          const swapStr = slot.swapOptions
-            .map(
-              alt =>
-                `${alt.name} [100%: ${alt.householdMeasure} | se misturar: ${formatHalfMeasurePdf(alt.householdMeasure, alt.portionGrams)}]`
-            )
-            .join(' OU ');
-          const swapText = `Se misturar 2 opções: ${formatHalfMeasurePdf(f.householdMeasure, f.portionGrams)} + metade de: ${swapStr}`;
-          const swapLines = doc.splitTextToSize(swapText, maxWidth - 18) as string[];
-
-          doc.setFillColor(255, 251, 235);
-          doc.roundedRect(margin + 6, innerY - 3, maxWidth - 12, swapLines.length * 4.1 + 3.5, 2, 2, 'F');
-
-          doc.setFont('helvetica', 'normal');
-          doc.setFontSize(8.2);
-          doc.setTextColor(120, 53, 15);
-          doc.text(swapLines, margin + 9, innerY + 1);
-          innerY += swapLines.length * 4.1 + 4.5;
-        } else {
-          innerY += 1.5;
-        }
-      });
-
-      y += estimatedHeight + 6;
-    });
-  }
-
-  // ===================== SUBSTITUIÇÕES + PAN EM 7 EIXOS =====================
-  if (prescription.substitutions && prescription.substitutions.length > 0) {
-    ensureSpace(45, 'Substituições e PAN');
-    y += 2;
+    startSubPage('Cardápio Individualizado');
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(13);
     doc.setTextColor(3, 66, 42);
-    doc.text('Lista Completa de Substituições Equivalentes', margin, y);
-    y += 6;
+    doc.text('Cardápio Definido Individualmente pelo Nutricionista', margin, y);
+    y += 7;
 
-    prescription.substitutions.forEach(sub => {
-      const eqLinesCount = sub.equivalents.reduce((sum, eq) => {
-        return sum + (doc.splitTextToSize(`• ${eq}`, maxWidth - 16) as string[]).length;
-      }, 0);
-      const boxH = 13 + eqLinesCount * 4.4;
-      ensureSpace(boxH + 4, 'Substituições e PAN');
-
+    const manualLines = measureWrappedLines(doc, prescription.manualPlanText, maxWidth - 12, 'normal', 9.2);
+    let cursor = 0;
+    while (cursor < manualLines.length) {
+      const availableLines = Math.max(4, Math.floor((bottomLimit - y - 10) / 4.6));
+      const slice = manualLines.slice(cursor, cursor + availableLines);
+      const h = 10 + slice.length * 4.6;
       doc.setFillColor(255, 255, 255);
       doc.setDrawColor(231, 229, 228);
-      doc.roundedRect(margin, y, maxWidth, boxH, 3, 3, 'FD');
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9.5);
-      doc.setTextColor(3, 66, 42);
-      doc.text(`${sub.group} — Base: ${sub.original}`, margin + 5, y + 6.5);
-
-      let sy = y + 12;
+      doc.roundedRect(margin, y, maxWidth, h, 3, 3, 'FD');
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8.8);
-      doc.setTextColor(68, 64, 60);
-      sub.equivalents.forEach(eq => {
-        const lines = doc.splitTextToSize(`• ${eq}`, maxWidth - 16) as string[];
-        doc.text(lines, margin + 7, sy);
-        sy += lines.length * 4.4;
+      doc.setFontSize(9.2);
+      doc.setTextColor(41, 37, 36);
+      doc.text(slice, margin + 6, y + 7);
+      cursor += slice.length;
+      if (cursor < manualLines.length) {
+        startSubPage('Cardápio Individualizado (cont.)');
+      }
+    }
+  } else {
+    const mealSheets = buildRichMealSheets(evaluation);
+
+    mealSheets.forEach(sheet => {
+      // Cada refeição começa limpa em sua própria página (estilo ficha de montagem!)
+      doc.addPage();
+      paintWarmPageBackground(doc);
+
+      // Banner superior dedicado à refeição (ZERO colisão de texto!)
+      doc.setFillColor(3, 66, 42);
+      doc.rect(0, 0, pageWidth, 22, 'F');
+      doc.setFillColor(115, 175, 4);
+      doc.rect(0, 22, pageWidth, 1.5, 'F');
+
+      // Título à esquerda (largura controlada de 128mm para nunca encostar no selo da direita)
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(190, 242, 100);
+      doc.text(`${sheet.orderLabel.toUpperCase()}  ·  ${sheet.suggestedWindow.toUpperCase()}`, margin, 7.2);
+
+      const titleLines = measureWrappedLines(doc, sheet.title, 128, 'bold', 12.2);
+      doc.setTextColor(255, 255, 255);
+      doc.text(titleLines[0], margin, 14.2);
+      if (titleLines[1]) {
+        doc.setFontSize(9.2);
+        doc.text(titleLines[1], margin, 19.2);
+      }
+
+      // Caixa de meta da refeição à direita (44mm fixos)
+      const badgeW = 44;
+      const badgeX = pageWidth - margin - badgeW;
+      doc.setFillColor(2, 49, 31);
+      doc.roundedRect(badgeX, 4.2, badgeW, 13.8, 2.2, 2.2, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.2);
+      doc.setTextColor(255, 255, 255);
+      doc.text(`~${sheet.estimatedKcal} kcal`, badgeX + badgeW / 2, 10, { align: 'center' });
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.6);
+      doc.setTextColor(190, 242, 100);
+      doc.text(`~${sheet.estimatedProteinG}g proteína`, badgeX + badgeW / 2, 15.2, { align: 'center' });
+
+      y = 27.5;
+
+      // 1. QUADRO FÓRMULA DA REFEIÇÃO (MONTE SOMANDO OS GRUPOS)
+      const formulaRowsMeta = sheet.formula.map(step => {
+        const labelLines = measureWrappedLines(doc, step.label, maxWidth - 52, 'bold', 8.3);
+        const hintLines = measureWrappedLines(doc, `Medida prática: ${step.measureHint}`, maxWidth - 52, 'normal', 7.3);
+        const rowH = Math.max(9.5, labelLines.length * 3.7 + hintLines.length * 3.3 + 3.2);
+        return { step, labelLines, hintLines, rowH };
       });
-      y += boxH + 4.5;
+      const formulaHeaderH = 6.5;
+      const formulaTotalH =
+        formulaHeaderH + formulaRowsMeta.reduce((acc, r) => acc + r.rowH, 0) + 2;
+
+      doc.setFillColor(255, 255, 255);
+      doc.setDrawColor(214, 211, 209);
+      doc.roundedRect(margin, y, maxWidth, formulaTotalH, 2.8, 2.8, 'FD');
+
+      // Cabeçalho da fórmula
+      doc.setFillColor(245, 245, 244);
+      doc.roundedRect(margin + 0.2, y + 0.2, maxWidth - 0.4, formulaHeaderH, 2.5, 2.5, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(68, 64, 60);
+      doc.text('FÓRMULA DA REFEIÇÃO — MONTE SOMANDO OS GRUPOS', margin + 4, y + 4.4);
+      doc.text('QUANTIDADE', pageWidth - margin - 4, y + 4.4, { align: 'right' });
+
+      let fy = y + formulaHeaderH + 1;
+      formulaRowsMeta.forEach((row, rIdx) => {
+        if (rIdx > 0) {
+          doc.setDrawColor(231, 229, 228);
+          doc.setLineWidth(0.25);
+          doc.line(margin + 3, fy, pageWidth - margin - 3, fy);
+          // Sinal "+" discreto no divisor
+          doc.setFillColor(255, 255, 255);
+          doc.circle(margin + maxWidth / 2, fy, 2.1, 'F');
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(7.5);
+          doc.setTextColor(3, 66, 42);
+          doc.text('+', margin + maxWidth / 2, fy + 0.9, { align: 'center' });
+        }
+
+        // Número
+        doc.setFillColor(3, 66, 42);
+        doc.roundedRect(margin + 3.5, fy + 1.8, 4.4, 4.4, 1, 1, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7);
+        doc.setTextColor(255, 255, 255);
+        doc.text(`${rIdx + 1}`, margin + 5.7, fy + 5, { align: 'center' });
+
+        // Texto do grupo
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8.3);
+        doc.setTextColor(28, 25, 23);
+        doc.text(row.labelLines, margin + 10, fy + 4.4);
+
+        const hintY = fy + 4.4 + row.labelLines.length * 3.7;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.3);
+        doc.setTextColor(120, 113, 108);
+        doc.text(row.hintLines, margin + 10, hintY);
+
+        // Caixa da quantidade em gramas à direita
+        const qtyBoxW = 34;
+        const qtyBoxX = pageWidth - margin - qtyBoxW - 3.5;
+        doc.setFillColor(236, 253, 245);
+        doc.setDrawColor(167, 243, 208);
+        doc.roundedRect(qtyBoxX, fy + 1.8, qtyBoxW, 6.2, 1.5, 1.5, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8.4);
+        doc.setTextColor(3, 66, 42);
+        doc.text(row.step.gramsLabel, qtyBoxX + qtyBoxW / 2, fy + 5.8, { align: 'center' });
+
+        fy += row.rowH;
+      });
+
+      y += formulaTotalH + 3.5;
+
+      // 2. EXPLICAÇÃO PRÁTICA
+      const howLines = measureWrappedLines(
+        doc,
+        `Como montar na prática: ${sheet.howToBuild}`,
+        maxWidth - 8,
+        'normal',
+        7.9
+      );
+      const howH = howLines.length * 3.6 + 5;
+      ensureSpace(howH + 3, sheet.title);
+      doc.setFillColor(236, 253, 245);
+      doc.setDrawColor(167, 243, 208);
+      doc.roundedRect(margin, y, maxWidth, howH, 2.2, 2.2, 'FD');
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.9);
+      doc.setTextColor(28, 25, 23);
+      doc.text(howLines, margin + 4, y + 4.6);
+      y += howH + 3.5;
+
+      // 3. FAIXAS COLORIDAS POR CLASSE DE ALIMENTO
+      sheet.bands.forEach(band => {
+        const pal = PDF_BAND_PALETTE[band.tone];
+        const bodyLines = measureWrappedLines(doc, band.itemsText, maxWidth - 8, 'normal', 7.8);
+        const headerH = 5.4;
+        const bodyH = bodyLines.length * 3.5 + 3.8;
+        const totalBandH = headerH + bodyH;
+
+        ensureSpace(totalBandH + 3, sheet.title);
+
+        // Corpo colorido suave
+        doc.setFillColor(...pal.bodyRgb);
+        doc.setDrawColor(...pal.borderRgb);
+        doc.roundedRect(margin, y, maxWidth, totalBandH, 2.2, 2.2, 'FD');
+
+        // Cabeçalho colorido forte
+        doc.setFillColor(...pal.headerRgb);
+        doc.roundedRect(margin, y, maxWidth, headerH, 2, 2, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.8);
+        doc.setTextColor(255, 255, 255);
+        doc.text(band.title, margin + 3.8, y + 3.8);
+
+        // Lista de alimentos
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.8);
+        doc.setTextColor(28, 25, 23);
+        doc.text(bodyLines, margin + 3.8, y + headerH + 3.8);
+
+        y += totalBandH + 2.6;
+      });
+
+      y += 1.2;
+
+      // 4. TABELAS DE SUBSTITUTOS (ESQUERDA) + QUADRO AMARELO DE OBSERVAÇÕES (DIREITA)
+      const colGap = 3.5;
+      const leftW = Math.round(maxWidth * 0.57);
+      const rightW = maxWidth - leftW - colGap;
+      const rightX = margin + leftW + colGap;
+
+      sheet.substituteTables.forEach(table => {
+        // Medir altura real da tabela à esquerda
+        const tableHeaderH = 6.2;
+        const measuredRows = table.rows.map(row => {
+          const nameLines = measureWrappedLines(
+            doc,
+            row.measureHint ? `${row.name} (${row.measureHint})` : row.name,
+            leftW - 26,
+            'normal',
+            7.6
+          );
+          const rowH = Math.max(5.8, nameLines.length * 3.4 + 2.4);
+          return { row, nameLines, rowH };
+        });
+        const leftTableH = tableHeaderH + measuredRows.reduce((acc, r) => acc + r.rowH, 0) + 1;
+
+        // Medir altura real das observações amarelas à direita
+        const measuredNotes = table.notes.map(note =>
+          measureWrappedLines(doc, `• ${note}`, rightW - 7, 'normal', 7.5)
+        );
+        const rightNotesH =
+          9 + measuredNotes.reduce((acc, lines) => acc + lines.length * 3.5 + 1.8, 0);
+
+        const blockH = Math.max(leftTableH, rightNotesH);
+        ensureSpace(blockH + 3.5, sheet.title);
+
+        // Desenha Tabela Esquerda
+        doc.setFillColor(255, 255, 255);
+        doc.setDrawColor(214, 211, 209);
+        doc.roundedRect(margin, y, leftW, blockH, 2.2, 2.2, 'FD');
+
+        doc.setFillColor(245, 245, 244);
+        doc.roundedRect(margin + 0.2, y + 0.2, leftW - 0.4, tableHeaderH, 2, 2, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.4);
+        doc.setTextColor(41, 37, 36);
+        const leftTitleLines = measureWrappedLines(doc, table.title, leftW - 24, 'bold', 7.4);
+        doc.text(leftTitleLines[0], margin + 3, y + 4.3);
+        doc.text('QTD.', margin + leftW - 3, y + 4.3, { align: 'right' });
+
+        let ty = y + tableHeaderH + 0.6;
+        measuredRows.forEach((mr, rIdx) => {
+          if (rIdx > 0) {
+            doc.setDrawColor(231, 229, 228);
+            doc.setLineWidth(0.2);
+            doc.line(margin + 2, ty, margin + leftW - 2, ty);
+          }
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(7.6);
+          doc.setTextColor(41, 37, 36);
+          doc.text(mr.nameLines, margin + 3, ty + 3.8);
+
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(7.8);
+          doc.setTextColor(3, 66, 42);
+          doc.text(mr.row.grams, margin + leftW - 3, ty + 3.8, { align: 'right' });
+
+          ty += mr.rowH;
+        });
+
+        // Desenha Quadro Amarelo de Observações à Direita
+        doc.setFillColor(254, 249, 195);
+        doc.setDrawColor(234, 179, 8);
+        doc.roundedRect(rightX, y, rightW, blockH, 2.2, 2.2, 'FD');
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.5);
+        doc.setTextColor(133, 77, 14);
+        doc.text('OBSERVAÇÕES PRÁTICAS', rightX + 3.5, y + 5.2);
+
+        let ny = y + 9.4;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(113, 63, 18);
+        measuredNotes.forEach(lines => {
+          doc.text(lines, rightX + 3.5, ny);
+          ny += lines.length * 3.5 + 1.8;
+        });
+
+        y += blockH + 3.2;
+      });
+
+      // 5. BLOCO "MINHAS ANOTAÇÕES" se houver espaço na folha
+      if (bottomLimit - y >= 16) {
+        const notesH = Math.min(22, bottomLimit - y - 1);
+        doc.setFillColor(255, 255, 255);
+        doc.setDrawColor(214, 211, 209);
+        doc.roundedRect(margin, y, maxWidth, notesH, 2.2, 2.2, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7.4);
+        doc.setTextColor(120, 113, 108);
+        doc.text('MINHAS ANOTAÇÕES:', margin + 3.5, y + 5);
+        doc.setDrawColor(231, 229, 228);
+        doc.setLineWidth(0.25);
+        if (notesH >= 15) {
+          doc.line(margin + 3.5, y + 11, pageWidth - margin - 3.5, y + 11);
+        }
+        if (notesH >= 20) {
+          doc.line(margin + 3.5, y + 17, pageWidth - margin - 3.5, y + 17);
+        }
+      }
     });
   }
 
-  ensureSpace(60, 'Relatório PAN em 7 Eixos');
-  y += 3;
+  // ===================== GUIA COMPLETO DE SUBSTITUIÇÕES EM 6 GRUPOS =====================
+  const completeCatalog = buildCompleteSubstitutionCatalog(evaluation);
+  startSubPage('Guia Completo de Substituições por Grupo');
+
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
+  doc.setTextColor(3, 66, 42);
+  doc.text('Guia Completo de Substituições (Folhas, Legumes, Frutas, Carboidratos, Proteínas e Gorduras)', margin, y);
+  y += 6.5;
+
+  completeCatalog.forEach(group => {
+    const pal = PDF_BAND_PALETTE[group.tone];
+    const subLines = measureWrappedLines(doc, group.subtitle, maxWidth - 8, 'normal', 7.8);
+    const itemLinesList = group.items.map(it =>
+      measureWrappedLines(doc, `• ${it}`, maxWidth - 10, 'normal', 8)
+    );
+    const headerH = 6.2;
+    const bodyH =
+      subLines.length * 3.6 +
+      3 +
+      itemLinesList.reduce((acc, lines) => acc + lines.length * 3.7 + 1, 0) +
+      3;
+    const totalH = headerH + bodyH;
+
+    ensureSpace(totalH + 3.5, 'Guia Completo de Substituições');
+
+    doc.setFillColor(255, 255, 255);
+    doc.setDrawColor(...pal.borderRgb);
+    doc.roundedRect(margin, y, maxWidth, totalH, 2.5, 2.5, 'FD');
+
+    doc.setFillColor(...pal.headerRgb);
+    doc.roundedRect(margin, y, maxWidth, headerH, 2.2, 2.2, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.2);
+    doc.setTextColor(255, 255, 255);
+    doc.text(group.title, margin + 4, y + 4.3);
+
+    let gy = y + headerH + 4.2;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.8);
+    doc.setTextColor(120, 113, 108);
+    doc.text(subLines, margin + 4, gy);
+    gy += subLines.length * 3.6 + 2;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(41, 37, 36);
+    itemLinesList.forEach(lines => {
+      doc.text(lines, margin + 5, gy);
+      gy += lines.length * 3.7 + 1;
+    });
+
+    y += totalH + 3.5;
+  });
+
+  // ===================== RELATÓRIO PAN EM 7 EIXOS =====================
+  ensureSpace(55, 'Relatório PAN em 7 Eixos');
+  y += 2;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12.5);
   doc.setTextColor(3, 66, 42);
   doc.text('Relatório PAN (Plano de Ação Nutricional) & 7 Eixos de Viabilidade', margin, y);
   y += 6;
 
-  const panBarrierLines = doc.splitTextToSize(`Barreira Principal: ${pan.primaryBarrier}`, maxWidth - 12) as string[];
-  const invLinesCount = pan.methodInterventions.reduce(
-    (sum, inv) => sum + (doc.splitTextToSize(`• ${inv}`, maxWidth - 16) as string[]).length,
-    0
+  const panBarrierLines = measureWrappedLines(
+    doc,
+    `Barreira Principal: ${pan.primaryBarrier}`,
+    maxWidth - 10,
+    'bold',
+    8.8
   );
-  const panH = 12 + panBarrierLines.length * 4.5 + invLinesCount * 4.4;
-  ensureSpace(panH + 6, 'Relatório PAN em 7 Eixos');
+  const invLinesList = pan.methodInterventions.map(inv =>
+    measureWrappedLines(doc, `• ${inv}`, maxWidth - 12, 'normal', 8.2)
+  );
+  const panH =
+    10 +
+    panBarrierLines.length * 4.1 +
+    invLinesList.reduce((acc, lines) => acc + lines.length * 3.9 + 0.8, 0);
+  ensureSpace(panH + 5, 'Relatório PAN em 7 Eixos');
 
   doc.setFillColor(236, 253, 245);
   doc.setDrawColor(167, 243, 208);
-  doc.roundedRect(margin, y, maxWidth, panH, 3, 3, 'FD');
+  doc.roundedRect(margin, y, maxWidth, panH, 2.8, 2.8, 'FD');
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(3, 66, 42);
-  doc.text(panBarrierLines, margin + 5, y + 7);
-
-  let py = y + 7 + panBarrierLines.length * 4.5 + 2;
-  doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.8);
+  doc.setTextColor(3, 66, 42);
+  doc.text(panBarrierLines, margin + 5, y + 6);
+
+  let py = y + 6 + panBarrierLines.length * 4.1 + 1.5;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.2);
   doc.setTextColor(41, 37, 36);
-  pan.methodInterventions.forEach(inv => {
-    const lines = doc.splitTextToSize(`• ${inv}`, maxWidth - 16) as string[];
-    doc.text(lines, margin + 7, py);
-    py += lines.length * 4.4;
+  invLinesList.forEach(lines => {
+    doc.text(lines, margin + 6, py);
+    py += lines.length * 3.9 + 0.8;
   });
-  y += panH + 6;
+  y += panH + 4.5;
 
   feasibilityProfile.forEach(axis => {
-    const lines = doc.splitTextToSize(`${axis.axis} (${axis.status}): ${axis.detail}`, maxWidth - 12) as string[];
-    const ah = 7 + lines.length * 4.2;
-    ensureSpace(ah + 3, 'Relatório PAN em 7 Eixos');
+    const lines = measureWrappedLines(
+      doc,
+      `${axis.axis} (${axis.status}): ${axis.detail}`,
+      maxWidth - 10,
+      'normal',
+      8.1
+    );
+    const ah = 6 + lines.length * 3.8;
+    ensureSpace(ah + 2.5, 'Relatório PAN em 7 Eixos');
     doc.setFillColor(255, 255, 255);
     doc.setDrawColor(231, 229, 228);
-    doc.roundedRect(margin, y, maxWidth, ah, 2.5, 2.5, 'FD');
+    doc.roundedRect(margin, y, maxWidth, ah, 2.2, 2.2, 'FD');
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.6);
+    doc.setFontSize(8.1);
     doc.setTextColor(68, 64, 60);
-    doc.text(lines, margin + 5, y + 5.5);
-    y += ah + 3;
+    doc.text(lines, margin + 5, y + 4.8);
+    y += ah + 2.5;
   });
 
   // Numeração de páginas em todas as páginas
