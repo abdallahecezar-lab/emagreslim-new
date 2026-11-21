@@ -48,10 +48,14 @@ interface MemberJourneyViewProps {
   isEmailVerified: boolean;
   setIsEmailVerified: (verified: boolean) => void;
   orderId: string;
+  includeChaFit21D: boolean;
+  paidTotalBrl: number;
   currentEvaluation: AssessmentRecord | null;
   onLoadPreset: (presetKey: string) => void;
   onCompleteFreeMapping: () => Promise<void>;
-  onApproveCheckout: () => Promise<void>;
+  onApproveCheckout: (includeChaFit21D: boolean) => Promise<void>;
+  onPurchaseChaFitUpsell: (orderId: string, assessmentId?: string) => Promise<void>;
+  onDownloadChaFitEbook: (orderId: string, assessmentId?: string) => Promise<void>;
   onVerifyEmail: () => Promise<void>;
   onSubmitFullAssessment: () => Promise<void>;
   onConfirmPan: (assessmentId: string, feedback: string) => Promise<void>;
@@ -79,10 +83,14 @@ export const MemberJourneyView: React.FC<MemberJourneyViewProps> = ({
   isEmailVerified,
   setIsEmailVerified,
   orderId,
+  includeChaFit21D,
+  paidTotalBrl,
   currentEvaluation,
   onLoadPreset,
   onCompleteFreeMapping,
   onApproveCheckout,
+  onPurchaseChaFitUpsell,
+  onDownloadChaFitEbook,
   onVerifyEmail,
   onSubmitFullAssessment,
   onConfirmPan,
@@ -95,7 +103,7 @@ export const MemberJourneyView: React.FC<MemberJourneyViewProps> = ({
   onNewFreeQuizSession,
   isAdminAuthenticated = false
 }) => {
-  const [activeDeliverableTab, setActiveDeliverableTab] = useState<'report_pan' | 'meal_plan' | 'substitutions'>('report_pan');
+  const [activeDeliverableTab, setActiveDeliverableTab] = useState<'report_pan' | 'meal_plan' | 'substitutions'>('meal_plan');
   const [memberPanFeedback, setMemberPanFeedback] = useState('');
   const [checkinWeight, setCheckinWeight] = useState('');
   const [checkinHunger, setCheckinHunger] = useState(4);
@@ -169,6 +177,7 @@ export const MemberJourneyView: React.FC<MemberJourneyViewProps> = ({
         <FreeResultOfferSection
           formData={formData}
           onApproveCheckout={onApproveCheckout}
+          onTrackGtm={onTrackGtm}
           isSubmitting={isSubmitting}
         />
       )}
@@ -177,9 +186,13 @@ export const MemberJourneyView: React.FC<MemberJourneyViewProps> = ({
       {journeyStep === 'checkout_auth' && (
         <section className="max-w-2xl mx-auto bg-white border border-stone-200 rounded-xl p-6 sm:p-8 space-y-6">
           <div className="border-b border-stone-200 pb-4 space-y-1">
-            <div className="flex items-center gap-2 text-xs font-semibold text-[#03422A] tabular-nums">
-              <CheckCircle2 className="w-4 h-4" />
-              <span>Pagamento confirmado · Pedido {orderId} · R$ 67,90</span>
+            <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-[#03422A] tabular-nums">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>
+                Pagamento confirmado · Pedido {orderId} ·{' '}
+                {paidTotalBrl.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                {includeChaFit21D ? ' (Plano Completo + CháFit 21D)' : ''}
+              </span>
             </div>
             <h2 className="text-2xl font-serif font-semibold text-stone-900">
               Confirmação de titularidade de e-mail
@@ -614,6 +627,82 @@ export const MemberJourneyView: React.FC<MemberJourneyViewProps> = ({
                       </div>
                     )}
                   </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ENTREGA LIBERADA OU UPSELL OPCIONAL PÓS-COMPRA — CHÁFIT 21D */}
+          {!currentEvaluation.engineResult.emergencyRedirect && (
+            <div className="pt-2">
+              {currentEvaluation.includeChaFit21D || includeChaFit21D ? (
+                <div className="bg-white border border-[#03422A]/30 rounded-2xl p-6 sm:p-7 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="space-y-1 max-w-2xl">
+                      <span className="text-xs font-semibold text-[#03422A] flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-[#73AF04] shrink-0" />
+                        <span>Complemento Digital Liberado · E-book em PDF</span>
+                      </span>
+                      <h3 className="text-xl font-serif font-semibold text-stone-900">
+                        CháFit 21D — Guia de Chás e Hábitos para Sua Rotina
+                      </h3>
+                      <p className="text-xs sm:text-sm text-stone-600 leading-relaxed">
+                        Seu guia completo de 21 dias com receitas práticas de infusões por horário e orientações de preparo está pronto para download.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={() =>
+                        onDownloadChaFitEbook(currentEvaluation.orderId, currentEvaluation.id)
+                      }
+                      className="px-5 py-3 rounded-xl bg-[#03422A] hover:bg-[#02311F] text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0 disabled:opacity-60"
+                    >
+                      <Download className="w-4 h-4 shrink-0" />
+                      <span>Baixar CháFit 21D (PDF)</span>
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-stone-500 border-t border-stone-200 pt-3 leading-relaxed">
+                    <strong>Orientação de segurança:</strong> uso informativo e complementar de rotina. Gestantes, lactantes, hipertensos, pessoas com condições renais/hepáticas ou em uso contínuo de medicamentos devem consultar médico ou nutricionista antes de consumir ervas e infusões.
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-[#03422A] text-white rounded-2xl p-6 sm:p-8 space-y-4">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="space-y-1.5 max-w-2xl">
+                      <span className="text-xs font-semibold text-[#A3E635]">
+                        Complemento Opcional Pós-Compra · Pagamento Único Separado
+                      </span>
+                      <h3 className="text-xl sm:text-2xl font-serif font-semibold leading-snug">
+                        Quer adicionar o e-book CháFit 21D para apoiar sua hidratação e rotina diária?
+                      </h3>
+                      <p className="text-xs sm:text-sm text-emerald-100/90 leading-relaxed">
+                        Guia digital em PDF com programação prática de 21 dias, receitas de chás por horário do dia e orientações de preparo. Download liberado imediatamente após a aprovação no Mercado Pago.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col sm:items-end gap-2 shrink-0">
+                      <span className="text-2xl font-serif font-semibold tabular-nums">
+                        R$ 27,90
+                      </span>
+                      <button
+                        type="button"
+                        disabled={isSubmitting}
+                        onClick={() =>
+                          onPurchaseChaFitUpsell(currentEvaluation.orderId, currentEvaluation.id)
+                        }
+                        className="w-full sm:w-auto px-5 py-3 rounded-xl bg-white hover:bg-emerald-50 text-[#03422A] text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap disabled:opacity-60"
+                      >
+                        <BookOpen className="w-4 h-4 shrink-0" />
+                        <span>
+                          {isSubmitting ? 'Abrindo Mercado Pago...' : 'Adicionar CháFit 21D (R$ 27,90)'}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-emerald-200/85 border-t border-emerald-800 pt-3 leading-relaxed">
+                    <strong>Aviso importante:</strong> cobrança separada e 100% opcional via Mercado Pago. Material informativo e complementar. Gestantes, lactantes, hipertensos ou pessoas em uso de medicação contínua devem consultar médico ou nutricionista antes de consumir ervas e infusões.
+                  </p>
                 </div>
               )}
             </div>

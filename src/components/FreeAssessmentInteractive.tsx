@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Activity,
   AlertCircle,
@@ -1470,17 +1470,38 @@ export const FreeAssessmentInteractive: React.FC<FreeAssessmentInteractiveProps>
 
 interface FreeResultOfferSectionProps {
   formData: AssessmentInput;
-  onApproveCheckout: () => Promise<void>;
+  onApproveCheckout: (includeChaFit21D: boolean) => Promise<void>;
+  onTrackGtm?: (eventName: string, meta?: Record<string, unknown>) => void;
   isSubmitting: boolean;
+}
+
+const PLAN_PRICE_BRL = 67.9;
+const CHAFIT_PRICE_BRL = 27.9;
+
+function formatBrl(value: number): string {
+  return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
 export const FreeResultOfferSection: React.FC<FreeResultOfferSectionProps> = ({
   formData,
   onApproveCheckout,
+  onTrackGtm,
   isSubmitting
 }) => {
+  const [includeChaFit21D, setIncludeChaFit21D] = useState(false);
+  const offerTrackedRef = React.useRef(false);
+
+  useEffect(() => {
+    if (offerTrackedRef.current) return;
+    offerTrackedRef.current = true;
+    onTrackGtm?.('view_offer', { base_amount_brl: PLAN_PRICE_BRL });
+  }, [onTrackGtm]);
+
   const barrier = BARRIER_EXPLANATIONS[formData.freePrimaryBarrier] || BARRIER_EXPLANATIONS.fome_noturna_tarde;
   const analysis = computeFreeMappingAnalysis(formData);
+  const totalAmountBrl = includeChaFit21D
+    ? Number((PLAN_PRICE_BRL + CHAFIT_PRICE_BRL).toFixed(2))
+    : PLAN_PRICE_BRL;
 
   const w1 = Math.round(analysis.idealWaterMl * 0.15);
   const w2 = Math.round(analysis.idealWaterMl * 0.3);
@@ -1508,6 +1529,16 @@ export const FreeResultOfferSection: React.FC<FreeResultOfferSectionProps> = ({
 
   const handleDownloadFreePdf = () => {
     exportFreeMappingPdf(formData, analysis, barrier.title, barrier.text);
+  };
+
+  const handleToggleOrderBump = () => {
+    const next = !includeChaFit21D;
+    setIncludeChaFit21D(next);
+    onTrackGtm?.('select_order_bump', {
+      product: 'chafit_21d',
+      selected: next,
+      addon_amount_brl: CHAFIT_PRICE_BRL
+    });
   };
 
   return (
@@ -1593,7 +1624,7 @@ export const FreeResultOfferSection: React.FC<FreeResultOfferSectionProps> = ({
                     {analysis.estimatedEvaluationsMin} a {analysis.estimatedEvaluationsMax} avaliações
                   </p>
                   <p className="text-xs text-stone-700 leading-snug">
-                    Ciclos de ajuste alimentar no EmagreSLIM (como consultas para recalibrar porções e evitar estagnação)
+                    Ciclos de ajuste alimentar no EmagreSLIM para recalibrar porções e manter evolução
                   </p>
                 </>
               ) : (
@@ -1673,7 +1704,7 @@ export const FreeResultOfferSection: React.FC<FreeResultOfferSectionProps> = ({
         {/* 3 PASSOS PRÁTICOS + BOTÃO PDF */}
         <div className="space-y-3">
           <h4 className="text-xs font-semibold text-stone-900">
-            3 ajustes práticos para você começar ainda esta semana (sem precisar comprar nada agora):
+            3 ajustes práticos para você começar ainda esta semana:
           </h4>
           <ul className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-stone-700">
             {practicalTips.map((tip, idx) => (
@@ -1700,74 +1731,153 @@ export const FreeResultOfferSection: React.FC<FreeResultOfferSectionProps> = ({
         </div>
       </div>
 
-      {/* BLOCO 2 — PRÓXIMO PASSO (OFERTA CONSULTIVA APÓS ENTREGAR VALOR) */}
+      {/* BLOCO 2 — TRANSIÇÃO PARA OFERTA PRINCIPAL + ORDER BUMP OPCIONAL CHÁFIT 21D */}
       <div className="bg-[#03422A] text-white rounded-2xl p-6 sm:p-10 space-y-6">
-        <div className="flex flex-col md:flex-row md:items-baseline justify-between gap-3 border-b border-emerald-800 pb-4">
-          <div className="space-y-1">
-            <span className="text-xs font-medium text-emerald-200">
-              Próximo Passo Opcional · Avaliação Completa EmagreSLIM
+        <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-emerald-800 pb-5">
+          <div className="space-y-2 max-w-2xl">
+            <span className="text-xs font-semibold text-[#A3E635]">
+              Próximo Passo · Plano Alimentar Personalizado EmagreSLIM
             </span>
-            <h3 className="text-2xl font-serif font-semibold leading-snug">
-              Quer receber a dieta completa de ~{analysis.estimatedDietKcal} kcal/dia já montada com suas refeições, porções ilustradas e substituições?
+            <h3 className="text-2xl sm:text-3xl font-serif font-semibold leading-snug text-balance">
+              Sua avaliação foi concluída. Agora transforme suas respostas em um plano alimentar feito para você.
             </h3>
-          </div>
-          <span className="text-3xl font-serif font-semibold tabular-nums shrink-0">R$ 67,90</span>
-        </div>
-
-        <p className="text-sm text-emerald-100/90 leading-relaxed max-w-3xl">
-          Tudo o que você já respondeu no Mapeamento Inicial continua salvo (sem repetir perguntas). Na sequência, você responde apenas os ajustes finais no mesmo formato etapa por etapa e libera na tela e em PDF:
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs sm:text-sm">
-          <div className="p-4 rounded-xl bg-white/10 border border-emerald-700/60 flex items-start gap-3">
-            <FileText className="w-4 h-4 text-emerald-300 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold">1. Relatório Científico + PAN</p>
-              <p className="text-xs text-emerald-100/80 mt-1">
-                Memorial completo (Mifflin-St Jeor + DRI 2023) e acordo prático da Semana 1 em 7 eixos.
-              </p>
-            </div>
+            <p className="text-sm text-emerald-100/90 leading-relaxed">
+              Tudo o que você já respondeu continua salvo. Após confirmar o pedido, você preenche apenas suas preferências finais (sem repetir perguntas) para gerar seu plano completo de ~{analysis.estimatedDietKcal} kcal/dia na tela e em PDF.
+            </p>
           </div>
 
-          <div className="p-4 rounded-xl bg-white/10 border border-emerald-700/60 flex items-start gap-3">
-            <Utensils className="w-4 h-4 text-emerald-300 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold">2. Cardápio na Sua Rotina (3 a 6 refeições)</p>
-              <p className="text-xs text-emerald-100/80 mt-1">
-                Alimentos TACO/IBGE com ilustrações de porções, Regra da Metade (½ + ½) e lista de substituições.
-              </p>
-            </div>
-          </div>
-
-          <div className="p-4 rounded-xl bg-white/10 border border-emerald-700/60 flex items-start gap-3">
-            <ShieldCheck className="w-4 h-4 text-emerald-300 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold">3. Triagem Clínica & PDF Completo</p>
-              <p className="text-xs text-emerald-100/80 mt-1">
-                Se houver condição clínica ou bariátrica, vai automaticamente para validação do nutricionista em até 24h.
-              </p>
-            </div>
+          <div className="md:text-right shrink-0">
+            <p className="text-3xl sm:text-4xl font-serif font-semibold tabular-nums">
+              {formatBrl(PLAN_PRICE_BRL)}
+            </p>
+            <p className="text-xs text-emerald-200 mt-0.5">Pagamento único · Sem mensalidade</p>
           </div>
         </div>
 
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-2">
-          <p className="text-[11px] text-emerald-200/85">
-            Pagamento único · Garantia de segurança clínica · Download imediato em PDF após conclusão.
-          </p>
-          <button
-            type="button"
-            disabled={isSubmitting}
-            onClick={onApproveCheckout}
-            className="px-7 py-3.5 rounded-xl bg-white text-[#03422A] hover:bg-emerald-50 text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 shrink-0"
-          >
-            <CreditCard className="w-4 h-4" />
-            <span>
-              {isSubmitting ? 'Processando...' : 'Destravar Plano Alimentar Completo (R$ 67,90)'}
+        {/* 4 Benefícios Palpáveis do Plano Completo */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs sm:text-sm">
+          {[
+            {
+              icon: Utensils,
+              title: 'Cardápio completo para sua rotina (3 a 6 refeições)',
+              desc: 'Pratos variados com folhas à vontade, alto volume de legumes, frutas diferentes ao longo do dia e proteínas do dia a dia.'
+            },
+            {
+              icon: FileText,
+              title: 'Porções exatas em gramas e medidas caseiras',
+              desc: 'Quantidades calculadas para a sua meta calórica e proteica, com Regra da Metade para montar o prato sem pesar tudo.'
+            },
+            {
+              icon: CheckCircle2,
+              title: 'Lista completa de substituições por grupo',
+              desc: 'Troque carboidratos, frutas, legumes, proteínas e gorduras mantendo o equilíbrio da dieta sem enjoar.'
+            },
+            {
+              icon: ShieldCheck,
+              title: 'Relatório técnico, PAN e triagem clínica',
+              desc: 'Memorial completo em PDF para baixar. Se houver condição clínica ou bariátrica, passa por revisão de nutricionista em até 24h.'
+            }
+          ].map(item => {
+            const Icon = item.icon;
+            return (
+              <div
+                key={item.title}
+                className="p-4 rounded-xl bg-white/10 border border-emerald-700/60 flex items-start gap-3"
+              >
+                <Icon className="w-4 h-4 text-[#A3E635] shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-semibold text-white">{item.title}</p>
+                  <p className="text-xs text-emerald-100/85 mt-1 leading-relaxed">{item.desc}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* ORDER BUMP OPCIONAL — CHÁFIT 21D (DESMARCADO POR PADRÃO) */}
+        <div
+          className={`rounded-xl border transition-colors p-5 space-y-3 ${
+            includeChaFit21D
+              ? 'bg-[#F9F8F4] text-stone-900 border-[#73AF04]'
+              : 'bg-white text-stone-900 border-stone-200'
+          }`}
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-200 pb-3">
+            <div className="space-y-0.5">
+              <span className="text-[11px] font-semibold text-[#03422A]">
+                Complemento Opcional em PDF · Adicione ao Pedido
+              </span>
+              <h4 className="text-base sm:text-lg font-serif font-semibold text-stone-900">
+                CháFit 21D — Guia de Chás e Hábitos para Sua Rotina
+              </h4>
+            </div>
+            <span className="text-lg font-serif font-semibold text-[#03422A] tabular-nums shrink-0">
+              + {formatBrl(CHAFIT_PRICE_BRL)}
             </span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
+          </div>
+
+          <p className="text-xs sm:text-sm text-stone-700 leading-relaxed">
+            Material digital complementar (PDF) com organização de 21 dias, receitas práticas de infusões por horário do dia, orientações de preparo e apoio para aumentar sua hidratação diária junto com a dieta.
+          </p>
+
+          <label className="flex items-start gap-3 p-3.5 rounded-lg bg-[#03422A]/5 border border-[#03422A]/20 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={includeChaFit21D}
+              onChange={handleToggleOrderBump}
+              className="mt-0.5 w-4 h-4 rounded border-stone-400 accent-[#03422A] shrink-0"
+            />
+            <span className="text-xs sm:text-sm font-semibold text-stone-900 leading-snug">
+              Sim, quero adicionar o e-book CháFit 21D por {formatBrl(CHAFIT_PRICE_BRL)} (pagamento único)
+            </span>
+          </label>
+
+          <p className="text-[11px] text-stone-500 leading-relaxed">
+            <strong>Aviso importante:</strong> material informativo e complementar de rotina. Gestantes, lactantes, pessoas com hipertensão, doenças renais/hepáticas ou em uso contínuo de medicamentos devem consultar médico ou nutricionista antes de consumir ervas e infusões.
+          </p>
+        </div>
+
+        {/* RESUMO TRANSPARENTE + CTA FINAL */}
+        <div className="pt-2 border-t border-emerald-800 flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+          <div className="space-y-1 text-xs sm:text-sm">
+            <div className="flex items-center gap-3 text-emerald-100/90 tabular-nums">
+              <span>Plano Alimentar Personalizado:</span>
+              <strong className="text-white">{formatBrl(PLAN_PRICE_BRL)}</strong>
+            </div>
+            {includeChaFit21D && (
+              <div className="flex items-center gap-3 text-[#A3E635] tabular-nums">
+                <span>+ E-book CháFit 21D (PDF):</span>
+                <strong>{formatBrl(CHAFIT_PRICE_BRL)}</strong>
+              </div>
+            )}
+            <div className="flex items-baseline gap-2.5 pt-1 text-white tabular-nums">
+              <span className="text-xs text-emerald-200">Total (pagamento único):</span>
+              <span className="text-2xl font-serif font-semibold">{formatBrl(totalAmountBrl)}</span>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:items-end gap-2">
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={() => onApproveCheckout(includeChaFit21D)}
+              className="w-full sm:w-auto px-7 py-4 rounded-xl bg-white text-[#03422A] hover:bg-emerald-50 text-sm font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-60 shrink-0"
+            >
+              <CreditCard className="w-4 h-4 shrink-0" />
+              <span>
+                {isSubmitting
+                  ? 'Abrindo pagamento seguro...'
+                  : `QUERO RECEBER MEU PLANO PERSONALIZADO (${formatBrl(totalAmountBrl)})`}
+              </span>
+              <ArrowRight className="w-4 h-4 shrink-0" />
+            </button>
+            <p className="text-[11px] text-emerald-200/85">
+              Pagamento seguro via Mercado Pago · Acesso imediato após confirmação
+            </p>
+          </div>
         </div>
       </div>
     </section>
   );
 };
+
