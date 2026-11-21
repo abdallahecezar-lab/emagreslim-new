@@ -1,14 +1,16 @@
 import fs from 'fs';
 import path from 'path';
-import { Pool } from 'pg';
-import { PRESET_SCENARIOS } from '../shared/catalog';
-import { runEmagreSlimEngineV06 } from '../shared/clinicalEngine';
+import pg from 'pg';
+import { PRESET_SCENARIOS } from '../shared/catalog.js';
+import { runEmagreSlimEngineV06 } from '../shared/clinicalEngine.js';
 import type {
   AssessmentInput,
   AssessmentRecord,
   EmailOutboxItem,
   GtmAuditEvent
-} from '../shared/types';
+} from '../shared/types.js';
+
+const { Pool } = pg;
 
 export interface OrderDraft {
   orderId: string;
@@ -33,7 +35,7 @@ const STORE_ROW_KEY = 'emagreslim_main_store';
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const STORE_PATH = path.join(DATA_DIR, 'emagreslim_store.json');
 
-let pgPool: Pool | null = null;
+let pgPool: pg.Pool | null = null;
 let tableInitialized = false;
 
 export function getDatabaseUrl(): string | undefined {
@@ -41,11 +43,15 @@ export function getDatabaseUrl(): string | undefined {
     process.env.DATABASE_URL ||
     process.env.POSTGRES_URL ||
     process.env.POSTGRES_PRISMA_URL ||
+    process.env.DATABASE_URL_UNPOOLED ||
+    process.env.POSTGRES_URL_NON_POOLING ||
+    process.env.STORAGE_DATABASE_URL ||
+    process.env.STORAGE_URL ||
     undefined
   )?.trim() || undefined;
 }
 
-function getPool(): Pool | null {
+function getPool(): pg.Pool | null {
   const dbUrl = getDatabaseUrl();
   if (!dbUrl) return null;
   if (!pgPool) {
@@ -59,7 +65,7 @@ function getPool(): Pool | null {
   return pgPool;
 }
 
-async function ensureTable(pool: Pool): Promise<void> {
+async function ensureTable(pool: pg.Pool): Promise<void> {
   if (tableInitialized) return;
   await pool.query(`
     CREATE TABLE IF NOT EXISTS emagreslim_kv_store (

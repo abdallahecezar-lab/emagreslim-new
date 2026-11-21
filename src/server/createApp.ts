@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import express from 'express';
-import { EMAIL_TEMPLATES } from '../shared/catalog';
+import { EMAIL_TEMPLATES } from '../shared/catalog.js';
 import {
   CheckinInputSchema,
   ClarificationInputSchema,
@@ -9,21 +9,21 @@ import {
   ManualApprovalInputSchema,
   PaidAssessmentInputSchema,
   runEmagreSlimEngineV06
-} from '../shared/clinicalEngine';
+} from '../shared/clinicalEngine.js';
 import type {
   AssessmentInput,
   AssessmentRecord,
   EmailOutboxItem,
   EmailTemplateKey,
   GtmAuditEvent
-} from '../shared/types';
+} from '../shared/types.js';
 import {
   createInitialState,
   getDatabaseUrl,
   loadStore,
   saveStore,
   type StoreState
-} from './store';
+} from './store.js';
 
 function getAdminPassword(): string {
   return process.env.ADMIN_PASSWORD?.trim() || 'emagreslim2026';
