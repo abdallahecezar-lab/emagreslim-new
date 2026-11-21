@@ -92,17 +92,20 @@ export const EmailGtmAuditView: React.FC<EmailGtmAuditViewProps> = ({
                   <td className="py-3 px-3 font-medium text-stone-900">{item.recipientEmail}</td>
                   <td className="py-3 px-3 text-stone-700">{item.safeSubject}</td>
                   <td className="py-3 px-3 font-mono text-stone-500 tabular-nums">{item.createdAt}</td>
-                  <td className="py-3 px-3 text-right font-semibold tabular-nums">
+                  <td className="py-3 px-3 text-right tabular-nums">
                     <span
-                      className={
+                      className={`font-semibold block ${
                         item.deliveryStatus === 'delivered'
                           ? 'text-[#03422A]'
                           : item.deliveryStatus === 'failed' || item.deliveryStatus === 'bounced'
                             ? 'text-rose-700'
                             : 'text-amber-700'
-                      }
+                      }`}
                     >
                       {item.deliveryStatus}
+                    </span>
+                    <span className="text-[11px] text-stone-500 block mt-0.5 max-w-xs ml-auto">
+                      {item.auditNote}
                     </span>
                   </td>
                 </tr>

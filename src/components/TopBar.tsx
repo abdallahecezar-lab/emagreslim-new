@@ -3,6 +3,7 @@ import emagreslimLogo from '../assets/images/emagreslim-logo.png';
 
 export type AppTab =
   | 'lead_journey'
+  | 'leads_crm'
   | 'nutritionist_panel'
   | 'email_gtm_audit'
   | 'tech_architecture';
@@ -10,6 +11,7 @@ export type AppTab =
 interface TopBarProps {
   activeTab: AppTab;
   onSelectTab: (tab: AppTab) => void;
+  leadsCount: number;
   pendingReviewsCount: number;
   emailCount: number;
   onStartFreeQuiz: () => void;
@@ -21,6 +23,7 @@ interface TopBarProps {
 export const TopBar: React.FC<TopBarProps> = ({
   activeTab,
   onSelectTab,
+  leadsCount,
   pendingReviewsCount,
   emailCount,
   onStartFreeQuiz,
@@ -55,6 +58,18 @@ export const TopBar: React.FC<TopBarProps> = ({
               }`}
             >
               Avaliação e Plano
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onSelectTab('leads_crm')}
+              className={`py-5 border-b-2 transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                activeTab === 'leads_crm'
+                  ? 'border-[#03422A] text-stone-900 font-semibold'
+                  : 'border-transparent text-stone-500 hover:text-stone-900'
+              }`}
+            >
+              Cadastros ({leadsCount})
             </button>
 
             <button
