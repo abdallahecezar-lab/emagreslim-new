@@ -232,6 +232,8 @@ export interface AssessmentRecord {
   checkins: CheckinRecord[];
   panConfirmedByMember: boolean;
   memberPanFeedback: string;
+  includeChaFit21D?: boolean;
+  totalAmountBrl?: number;
 }
 
 export type EmailTemplateKey =
@@ -259,4 +261,28 @@ export interface GtmAuditEvent {
   eventName: string;
   payload: string;
   audit: string;
+}
+
+export type LeadStage =
+  | 'lead_gratuito'
+  | 'checkout_iniciado'
+  | 'cliente_pago'
+  | 'cliente_com_chafit';
+
+export interface LeadRecord {
+  id: string;
+  memberName: string;
+  email: string;
+  whatsapp: string;
+  sex: Sex;
+  age: number;
+  weightKg: number;
+  heightCm: number;
+  targetWeightKg: number;
+  primaryBarrier: string;
+  stage: LeadStage;
+  orderId?: string;
+  totalAmountBrl?: number;
+  createdAt: string;
+  updatedAt: string;
 }
