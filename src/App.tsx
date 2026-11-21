@@ -4,6 +4,7 @@ import { AdminLoginView } from './components/AdminLoginView';
 import { ArchitectureSpecsView } from './components/ArchitectureSpecsView';
 import { ClinicalQueueView } from './components/ClinicalQueueView';
 import { EmailGtmAuditView } from './components/EmailGtmAuditView';
+import { LeadsCrmView } from './components/LeadsCrmView';
 import { MemberJourneyView, type JourneyStep } from './components/MemberJourneyView';
 import { TopBar, type AppTab } from './components/TopBar';
 import { PRESET_SCENARIOS } from './shared/catalog';
@@ -12,7 +13,8 @@ import type {
   AssessmentInput,
   AssessmentRecord,
   EmailOutboxItem,
-  GtmAuditEvent
+  GtmAuditEvent,
+  LeadRecord
 } from './shared/types';
 import { pushDataLayerEvent } from './utils/analytics';
 import emagreslimLogo from './assets/images/emagreslim-logo.png';
@@ -21,6 +23,7 @@ interface AdminServerState {
   assessments: AssessmentRecord[];
   emailOutbox: EmailOutboxItem[];
   gtmEvents: GtmAuditEvent[];
+  leads?: LeadRecord[];
 }
 
 const ADMIN_TOKEN_KEY = 'emagreslim_admin_token';
@@ -105,6 +108,7 @@ export default function App() {
   const [assessments, setAssessments] = useState<AssessmentRecord[]>([]);
   const [emailOutbox, setEmailOutbox] = useState<EmailOutboxItem[]>([]);
   const [gtmEvents, setGtmEvents] = useState<GtmAuditEvent[]>([]);
+  const [leads, setLeads] = useState<LeadRecord[]>([]);
   const [selectedReviewId, setSelectedReviewId] = useState<string>('ASM-2026-0142');
   const [isLoadingState, setIsLoadingState] = useState(false);
   const [freeQuizSessionKey, setFreeQuizSessionKey] = useState(1);
@@ -121,6 +125,7 @@ export default function App() {
     setAssessments(data.assessments || []);
     setEmailOutbox(data.emailOutbox || []);
     setGtmEvents(data.gtmEvents || []);
+    setLeads(data.leads || []);
   }, []);
 
   const fetchAdminState = useCallback(
@@ -406,7 +411,9 @@ export default function App() {
           weightKg: formData.weightKg,
           heightCm: formData.heightCm,
           targetWeightKg: formData.targetWeightKg,
-          freePrimaryBarrier: formData.freePrimaryBarrier
+          freePrimaryBarrier: formData.freePrimaryBarrier,
+          waterIntakeLiters: formData.waterIntakeLiters,
+          exerciseMinutesPerWeek: formData.exerciseMinutesPerWeek
         })
       });
       const data = await res.json();
@@ -773,6 +780,7 @@ export default function App() {
       <TopBar
         activeTab={activeTab}
         onSelectTab={setActiveTab}
+        leadsCount={leads.length}
         pendingReviewsCount={pendingReviewsCount}
         emailCount={emailOutbox.length}
         isAdminAuthenticated={isAdminAuthenticated}
@@ -881,6 +889,10 @@ export default function App() {
                   setFreeQuizSessionKey(k => k + 1);
                 }}
               />
+            )}
+
+            {isAdminAuthenticated && activeTab === 'leads_crm' && (
+              <LeadsCrmView leads={leads} />
             )}
 
             {isAdminAuthenticated && activeTab === 'nutritionist_panel' && (
