@@ -1,21 +1,26 @@
 import crypto from 'crypto';
 import express from 'express';
-import { EMAIL_TEMPLATES } from '../shared/catalog.js';
+import nodemailer from 'nodemailer';
+import { EMAIL_TEMPLATES, PRESET_SCENARIOS } from '../shared/catalog.js';
 import {
   CheckinInputSchema,
   ClarificationInputSchema,
+  computeFreeMappingAnalysis,
   evaluateDataSanityLock,
   FreeMappingSchema,
   ManualApprovalInputSchema,
   PaidAssessmentInputSchema,
   runEmagreSlimEngineV06
 } from '../shared/clinicalEngine.js';
+import { buildRichMealSheets } from '../shared/mealBuilder.js';
 import type {
   AssessmentInput,
   AssessmentRecord,
   EmailOutboxItem,
   EmailTemplateKey,
-  GtmAuditEvent
+  GtmAuditEvent,
+  LeadRecord,
+  LeadStage
 } from '../shared/types.js';
 import {
   createInitialState,
@@ -106,32 +111,235 @@ function resolvePublicBaseUrl(req: express.Request): string {
   return `${proto}://${host}`;
 }
 
-async function sendRealEmailViaResend(params: {
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildFreeMappingEmailHtml(params: {
+  weightKg: number;
+  targetWeightKg: number;
+  age: number;
+  heightCm: number;
+  sex: 'feminino' | 'masculino';
+  waterIntakeLiters: number;
+  exerciseMinutesPerWeek: number;
+  baseUrl: string;
+}): string {
+  const analysis = computeFreeMappingAnalysis({
+    ...PRESET_SCENARIOS.preset_a_eligible.data,
+    sex: params.sex,
+    age: params.age,
+    weightKg: params.weightKg,
+    heightCm: params.heightCm,
+    targetWeightKg: params.targetWeightKg,
+    waterIntakeLiters: params.waterIntakeLiters,
+    exerciseMinutesPerWeek: params.exerciseMinutesPerWeek,
+    healthConditions: ['nenhuma'],
+    bariatricHistory: false
+  });
+
+  return `
+    <div style="margin: 20px 0; padding: 18px; background: #F9F8F4; border: 1px solid #e7e5e4; border-radius: 10px;">
+      <p style="font-size: 13px; font-weight: bold; color: #03422A; margin: 0 0 12px 0;">Resumo da Sua Avaliação Inicial Gratuita</p>
+      <table style="width: 100%; border-collapse: collapse; font-size: 13px; color: #292524;">
+        <tr>
+          <td style="padding: 6px 0; border-bottom: 1px solid #e7e5e4;"><strong>Ponto de partida → Meta:</strong></td>
+          <td style="padding: 6px 0; border-bottom: 1px solid #e7e5e4; text-align: right;">${escapeHtml(params.weightKg)} kg → ${escapeHtml(params.targetWeightKg)} kg (IMC ${escapeHtml(analysis.bmi)} → ${escapeHtml(analysis.targetBmi)})</td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0; border-bottom: 1px solid #e7e5e4;"><strong>Gasto energético estimado (TDEE):</strong></td>
+          <td style="padding: 6px 0; border-bottom: 1px solid #e7e5e4; text-align: right;">~${escapeHtml(analysis.tdeeKcal)} kcal/dia</td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0; border-bottom: 1px solid #e7e5e4;"><strong>Faixa estimada para emagrecer:</strong></td>
+          <td style="padding: 6px 0; border-bottom: 1px solid #e7e5e4; text-align: right; color: #03422A; font-weight: bold;">~${escapeHtml(analysis.estimatedDietKcal)} kcal/dia</td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0; border-bottom: 1px solid #e7e5e4;"><strong>Meta diária de água:</strong></td>
+          <td style="padding: 6px 0; border-bottom: 1px solid #e7e5e4; text-align: right;">${escapeHtml((analysis.idealWaterMl / 1000).toFixed(1))} L/dia (${escapeHtml(analysis.idealWaterCups)} copos de 250 ml)</td>
+        </tr>
+        <tr>
+          <td style="padding: 6px 0;"><strong>Ciclos estimados até a meta:</strong></td>
+          <td style="padding: 6px 0; text-align: right;">${analysis.kgToLose > 0 ? `${escapeHtml(analysis.estimatedEvaluationsMin)} a ${escapeHtml(analysis.estimatedEvaluationsMax)} avaliações` : '1 avaliação de manutenção'}</td>
+        </tr>
+      </table>
+      <p style="font-size: 12px; color: #57534e; margin: 14px 0 0 0; line-height: 1.5;">
+        <strong>Movimento sugerido:</strong> ${escapeHtml(analysis.exerciseRecommendationTitle)} — ${escapeHtml(analysis.exerciseRecommendationDetail)}
+      </p>
+      <div style="margin-top: 16px;">
+        <a href="${escapeHtml(params.baseUrl)}" style="display: inline-block; background: #03422A; color: #ffffff; text-decoration: none; font-size: 13px; font-weight: bold; padding: 10px 18px; border-radius: 8px;">
+          Acessar EmagreSLIM
+        </a>
+      </div>
+    </div>
+  `;
+}
+
+function buildPlanDeliveredEmailHtml(record: AssessmentRecord, baseUrl: string): string {
+  const rx = record.engineResult.prescription;
+  if (!rx) return '';
+
+  const sheets = buildRichMealSheets(record);
+  const mealsHtml = rx.manualPlanText
+    ? `<div style="margin: 14px 0; padding: 14px; background: #ffffff; border: 1px solid #e7e5e4; border-radius: 8px; white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #292524;">${escapeHtml(rx.manualPlanText)}</div>`
+    : sheets
+        .map(sheet => {
+          const formulaLines = sheet.formula
+            .map(
+              f =>
+                `<li style="margin: 3px 0;"><strong>${escapeHtml(f.label)}:</strong> ${escapeHtml(f.gramsLabel)} (${escapeHtml(f.measureHint)})</li>`
+            )
+            .join('');
+          const bandsHtml = sheet.bands
+            .map(
+              b =>
+                `<p style="font-size: 12px; color: #44403c; margin: 6px 0;"><strong>${escapeHtml(b.title)}:</strong> ${escapeHtml(b.itemsText)}</p>`
+            )
+            .join('');
+          return `
+            <div style="margin: 12px 0; padding: 14px; background: #ffffff; border: 1px solid #e7e5e4; border-radius: 8px;">
+              <p style="font-size: 14px; font-weight: bold; color: #03422A; margin: 0 0 4px 0;">
+                ${escapeHtml(sheet.orderLabel)} · ${escapeHtml(sheet.title)} (${escapeHtml(sheet.suggestedWindow)})
+              </p>
+              <p style="font-size: 12px; color: #57534e; margin: 0 0 8px 0;">~${escapeHtml(sheet.estimatedKcal)} kcal · ~${escapeHtml(sheet.estimatedProteinG)} g proteína</p>
+              <ul style="margin: 0 0 8px 18px; padding: 0; font-size: 12px; color: #292524;">${formulaLines}</ul>
+              ${bandsHtml}
+            </div>
+          `;
+        })
+        .join('');
+
+  const chaFitBlock = record.includeChaFit21D
+    ? `
+      <div style="margin: 18px 0; padding: 16px; background: #03422A; color: #ffffff; border-radius: 10px;">
+        <p style="font-size: 13px; font-weight: bold; color: #A3E635; margin: 0 0 6px 0;">Complemento Digital Liberado</p>
+        <p style="font-size: 15px; font-weight: bold; margin: 0 0 6px 0;">E-book CháFit 21D (PDF)</p>
+        <p style="font-size: 12px; color: #ecfdf5; margin: 0 0 12px 0; line-height: 1.5;">
+          Clique abaixo para baixar seu guia digital de 21 dias com receitas de infusões por horário e orientações de rotina.
+        </p>
+        <a href="${escapeHtml(baseUrl)}${CHAFIT_DOWNLOAD_URL}" style="display: inline-block; background: #ffffff; color: #03422A; text-decoration: none; font-size: 13px; font-weight: bold; padding: 10px 16px; border-radius: 8px;">
+          Baixar E-book CháFit 21D (PDF)
+        </a>
+        <p style="font-size: 11px; color: #d1fae5; margin: 10px 0 0 0;">
+          Aviso: material informativo. Gestantes, lactantes, hipertensos ou pessoas em uso contínuo de medicamentos devem consultar médico ou nutricionista antes de consumir ervas e infusões.
+        </p>
+      </div>
+    `
+    : '';
+
+  return `
+    <div style="margin: 18px 0; padding: 16px; background: #F9F8F4; border: 1px solid #e7e5e4; border-radius: 10px;">
+      <p style="font-size: 13px; font-weight: bold; color: #03422A; margin: 0 0 10px 0;">Suas Metas Diárias — Plano EmagreSLIM (${escapeHtml(record.id)})</p>
+      <table style="width: 100%; border-collapse: collapse; font-size: 13px; color: #292524;">
+        <tr>
+          <td style="padding: 5px 0; border-bottom: 1px solid #e7e5e4;"><strong>Meta calórica:</strong></td>
+          <td style="padding: 5px 0; border-bottom: 1px solid #e7e5e4; text-align: right;"><strong>${escapeHtml(rx.targetKcal)} kcal/dia</strong></td>
+        </tr>
+        <tr>
+          <td style="padding: 5px 0; border-bottom: 1px solid #e7e5e4;"><strong>Proteínas / Carboidratos / Gorduras:</strong></td>
+          <td style="padding: 5px 0; border-bottom: 1px solid #e7e5e4; text-align: right;">${escapeHtml(rx.macros.proteinG)}g / ${escapeHtml(rx.macros.carbsG)}g / ${escapeHtml(rx.macros.fatG)}g</td>
+        </tr>
+        <tr>
+          <td style="padding: 5px 0;"><strong>Meta de hidratação:</strong></td>
+          <td style="padding: 5px 0; text-align: right;">${escapeHtml((rx.waterTargetMl / 1000).toFixed(1))} L/dia (${escapeHtml(rx.waterTargetMl)} ml)</td>
+        </tr>
+      </table>
+    </div>
+    <p style="font-size: 14px; font-weight: bold; color: #1c1917; margin: 18px 0 8px 0;">Seu Cardápio Diário Personalizado:</p>
+    ${mealsHtml}
+    ${chaFitBlock}
+  `;
+}
+
+function isSmtpConfigured(): boolean {
+  return Boolean(process.env.SMTP_USER?.trim() && process.env.SMTP_PASS?.trim());
+}
+
+function isEmailProviderConfigured(): boolean {
+  return isSmtpConfigured() || Boolean(process.env.RESEND_API_KEY?.trim());
+}
+
+async function sendRealEmail(params: {
   to: string;
   subject: string;
   memberName: string;
   templateKey: EmailTemplateKey;
   assessmentNumber?: number;
-}): Promise<'delivered' | 'failed' | 'unconfigured'> {
-  const apiKey = process.env.RESEND_API_KEY?.trim();
-  if (!apiKey) return 'unconfigured';
-
-  const from = process.env.RESEND_FROM_EMAIL?.trim() || 'EmagreSLIM <onboarding@resend.dev>';
+  extraHtml?: string;
+}): Promise<{
+  status: 'delivered' | 'failed' | 'unconfigured';
+  provider?: 'smtp' | 'resend';
+  errorDetail?: string;
+}> {
   const tpl = EMAIL_TEMPLATES[params.templateKey];
+  const safeName = escapeHtml(params.memberName);
+  const safeBody = escapeHtml(
+    tpl.body
+      .replace('{{memberName}}', params.memberName)
+      .replace('{{assessmentNumber}}', String(params.assessmentNumber ?? 1))
+  );
+
   const html = `
-    <div style="font-family: Arial, sans-serif; color: #1c1917; max-width: 600px; margin: 0 auto; padding: 24px; background: #F9F8F4;">
-      <div style="background: #ffffff; border: 1px solid #e7e5e4; border-radius: 12px; padding: 28px;">
-        <p style="font-size: 13px; font-weight: bold; color: #03422A; margin: 0 0 8px 0;">EmagreSLIM</p>
-        <h1 style="font-size: 20px; margin: 0 0 16px 0; color: #1c1917;">Olá, ${params.memberName}!</h1>
+    <div style="font-family: Arial, sans-serif; color: #1c1917; max-width: 640px; margin: 0 auto; padding: 20px; background: #F9F8F4;">
+      <div style="background: #ffffff; border: 1px solid #e7e5e4; border-radius: 12px; padding: 26px;">
+        <p style="font-size: 14px; font-weight: bold; color: #03422A; margin: 0 0 8px 0;">EMAGRE<span style="color: #73AF04;">SLIM</span></p>
+        <h1 style="font-size: 20px; margin: 0 0 14px 0; color: #1c1917;">Olá, ${safeName}!</h1>
         <p style="font-size: 14px; line-height: 1.6; color: #44403c; margin: 0 0 16px 0;">
-          ${tpl.body.replace('{{memberName}}', params.memberName).replace('{{assessmentNumber}}', String(params.assessmentNumber ?? 1))}
+          ${safeBody}
         </p>
-        <p style="font-size: 12px; color: #78716c; border-top: 1px solid #e7e5e4; padding-top: 16px; margin: 0;">
+        ${params.extraHtml || ''}
+        <p style="font-size: 12px; color: #78716c; border-top: 1px solid #e7e5e4; padding-top: 16px; margin: 18px 0 0 0;">
           Mensagem automática enviada pelo canal oficial EmagreSLIM. Seus dados clínicos são protegidos e nunca são expostos no assunto do e-mail.
         </p>
       </div>
     </div>
   `;
+
+  // 1. Prioridade: SMTP próprio (ex.: Hostinger contato@emagreslim.com.br)
+  if (isSmtpConfigured()) {
+    const host = process.env.SMTP_HOST?.trim() || 'smtp.hostinger.com';
+    const portRaw = Number(process.env.SMTP_PORT || '465');
+    const port = Number.isFinite(portRaw) && portRaw > 0 ? portRaw : 465;
+    const user = process.env.SMTP_USER!.trim();
+    const pass = process.env.SMTP_PASS!.trim();
+    const from = process.env.SMTP_FROM_EMAIL?.trim() || `EmagreSLIM <${user}>`;
+
+    try {
+      const transporter = nodemailer.createTransport({
+        host,
+        port,
+        secure: port === 465,
+        auth: { user, pass },
+        connectionTimeout: 10000,
+        greetingTimeout: 10000,
+        socketTimeout: 15000
+      });
+
+      await transporter.sendMail({
+        from,
+        to: params.to,
+        replyTo: user,
+        subject: params.subject,
+        html
+      });
+      return { status: 'delivered', provider: 'smtp' };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Erro desconhecido no SMTP';
+      console.error('SMTP email send error:', msg);
+      return { status: 'failed', provider: 'smtp', errorDetail: msg.slice(0, 140) };
+    }
+  }
+
+  // 2. Alternativa: Resend API
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  if (!apiKey) return { status: 'unconfigured' };
+
+  const from = process.env.RESEND_FROM_EMAIL?.trim() || 'EmagreSLIM <onboarding@resend.dev>';
 
   try {
     const res = await fetch('https://api.resend.com/emails', {
@@ -147,9 +355,23 @@ async function sendRealEmailViaResend(params: {
         html
       })
     });
-    return res.ok ? 'delivered' : 'failed';
-  } catch {
-    return 'failed';
+    if (res.ok) {
+      return { status: 'delivered', provider: 'resend' };
+    }
+    const errText = await res.text().catch(() => '');
+    console.error('Resend API error:', res.status, errText);
+    return {
+      status: 'failed',
+      provider: 'resend',
+      errorDetail: `HTTP ${res.status}: ${errText.slice(0, 140)}`
+    };
+  } catch (err) {
+    console.error('Resend network error:', err);
+    return {
+      status: 'failed',
+      provider: 'resend',
+      errorDetail: 'Erro de rede ao conectar à API do Resend'
+    };
   }
 }
 
@@ -161,6 +383,7 @@ async function enqueueIdempotentEmail(
     memberName: string;
     templateKey: EmailTemplateKey;
     assessmentNumber?: number;
+    extraHtml?: string;
   }
 ): Promise<EmailOutboxItem | null> {
   const existing = state.emailOutbox.find(e => e.idempotencyKey === params.idempotencyKey);
@@ -172,13 +395,16 @@ async function enqueueIdempotentEmail(
     '{{assessmentNumber}}',
     String(params.assessmentNumber ?? 1)
   );
-  const resendStatus = await sendRealEmailViaResend({
+  const sendResult = await sendRealEmail({
     to: params.recipientEmail,
     subject: safeSubject,
     memberName: params.memberName,
     templateKey: params.templateKey,
-    assessmentNumber: params.assessmentNumber
+    assessmentNumber: params.assessmentNumber,
+    extraHtml: params.extraHtml
   });
+
+  const providerLabel = sendResult.provider === 'smtp' ? 'SMTP Hostinger' : 'Resend';
 
   const item: EmailOutboxItem = {
     id: `EML-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -188,18 +414,18 @@ async function enqueueIdempotentEmail(
     templateKey: params.templateKey,
     safeSubject,
     deliveryStatus:
-      resendStatus === 'delivered'
+      sendResult.status === 'delivered'
         ? 'delivered'
-        : resendStatus === 'failed'
+        : sendResult.status === 'failed'
           ? 'failed'
           : 'prepared',
     createdAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
     auditNote:
-      resendStatus === 'delivered'
-        ? 'Enviado via Resend · Sem dados clínicos no assunto'
-        : resendStatus === 'failed'
-          ? 'Falha no provedor Resend · Verificar domínio/chave'
-          : 'Modo simulação (RESEND_API_KEY não configurada) · Assunto sanitizado'
+      sendResult.status === 'delivered'
+        ? `Enviado via ${providerLabel} · Sem dados clínicos no assunto`
+        : sendResult.status === 'failed'
+          ? `Falha ${providerLabel} (${sendResult.errorDetail || 'verificar credenciais'})`
+          : 'Modo simulação (SMTP_USER/SMTP_PASS ou RESEND_API_KEY não configurados)'
   };
   state.emailOutbox.unshift(item);
   return item;
@@ -305,7 +531,9 @@ export function createApiApp(): express.Express {
       service: 'emagreslim-prod',
       mercadoPagoConfigured: Boolean(process.env.MERCADOPAGO_ACCESS_TOKEN?.trim()),
       databaseConfigured: Boolean(getDatabaseUrl()),
-      resendConfigured: Boolean(process.env.RESEND_API_KEY?.trim())
+      smtpConfigured: isSmtpConfigured(),
+      resendConfigured: Boolean(process.env.RESEND_API_KEY?.trim()),
+      emailConfigured: isEmailProviderConfigured()
     });
   });
 
@@ -313,7 +541,7 @@ export function createApiApp(): express.Express {
     res.json({
       mercadoPagoEnabled: Boolean(process.env.MERCADOPAGO_ACCESS_TOKEN?.trim()),
       databaseConnected: Boolean(getDatabaseUrl()),
-      emailEnabled: Boolean(process.env.RESEND_API_KEY?.trim()),
+      emailEnabled: isEmailProviderConfigured(),
       gtmId: 'GTM-5THGKLB4'
     });
   });
@@ -328,9 +556,142 @@ export function createApiApp(): express.Express {
     res.json({ ok: true, token });
   });
 
+const STAGE_PRIORITY: Record<LeadStage, number> = {
+  lead_gratuito: 1,
+  checkout_iniciado: 2,
+  cliente_pago: 3,
+  cliente_com_chafit: 4
+};
+
+function upsertLeadRecord(
+  list: LeadRecord[],
+  incoming: {
+    memberName: string;
+    email: string;
+    whatsapp?: string;
+    sex?: 'feminino' | 'masculino';
+    age?: number;
+    weightKg?: number;
+    heightCm?: number;
+    targetWeightKg?: number;
+    primaryBarrier?: string;
+    stage: LeadStage;
+    orderId?: string;
+    totalAmountBrl?: number;
+    timestamp?: string;
+  }
+): void {
+  const emailNorm = incoming.email.trim().toLowerCase();
+  if (!emailNorm || !emailNorm.includes('@')) return;
+  const nowIso = incoming.timestamp || new Date().toISOString();
+  const idx = list.findIndex(item => item.email.trim().toLowerCase() === emailNorm);
+
+  if (idx >= 0) {
+    const prev = list[idx];
+    const nextStage =
+      STAGE_PRIORITY[incoming.stage] >= STAGE_PRIORITY[prev.stage] ? incoming.stage : prev.stage;
+    list[idx] = {
+      ...prev,
+      memberName: incoming.memberName?.trim() || prev.memberName,
+      whatsapp: incoming.whatsapp?.trim() || prev.whatsapp,
+      sex: incoming.sex || prev.sex,
+      age: incoming.age ?? prev.age,
+      weightKg: incoming.weightKg ?? prev.weightKg,
+      heightCm: incoming.heightCm ?? prev.heightCm,
+      targetWeightKg: incoming.targetWeightKg ?? prev.targetWeightKg,
+      primaryBarrier: incoming.primaryBarrier || prev.primaryBarrier,
+      stage: nextStage,
+      orderId: incoming.orderId || prev.orderId,
+      totalAmountBrl: incoming.totalAmountBrl ?? prev.totalAmountBrl,
+      updatedAt: nowIso
+    };
+    return;
+  }
+
+  list.unshift({
+    id: `LEAD-${Date.now()}-${Math.floor(100 + Math.random() * 899)}`,
+    memberName: incoming.memberName?.trim() || 'Visitante',
+    email: incoming.email.trim(),
+    whatsapp: incoming.whatsapp?.trim() || '',
+    sex: incoming.sex || 'feminino',
+    age: incoming.age ?? 0,
+    weightKg: incoming.weightKg ?? 0,
+    heightCm: incoming.heightCm ?? 0,
+    targetWeightKg: incoming.targetWeightKg ?? 0,
+    primaryBarrier: incoming.primaryBarrier || '',
+    stage: incoming.stage,
+    orderId: incoming.orderId,
+    totalAmountBrl: incoming.totalAmountBrl,
+    createdAt: nowIso,
+    updatedAt: nowIso
+  });
+}
+
+function buildSyncedLeads(state: StoreState): LeadRecord[] {
+  const merged: LeadRecord[] = (state.leads || []).map(l => ({ ...l }));
+
+  for (const draft of Object.values(state.drafts || {})) {
+    const stage: LeadStage =
+      draft.paymentStatus === 'approved'
+        ? draft.includeChaFit21D
+          ? 'cliente_com_chafit'
+          : 'cliente_pago'
+        : 'checkout_iniciado';
+    upsertLeadRecord(merged, {
+      memberName: draft.memberName,
+      email: draft.email,
+      whatsapp: draft.formData?.whatsapp,
+      sex: draft.formData?.sex,
+      age: draft.formData?.age,
+      weightKg: draft.formData?.weightKg,
+      heightCm: draft.formData?.heightCm,
+      targetWeightKg: draft.formData?.targetWeightKg,
+      primaryBarrier: draft.formData?.freePrimaryBarrier,
+      stage,
+      orderId: draft.orderId,
+      totalAmountBrl: draft.totalAmountBrl,
+      timestamp: draft.updatedAt
+    });
+  }
+
+  for (const asm of state.assessments || []) {
+    const stage: LeadStage = asm.includeChaFit21D ? 'cliente_com_chafit' : 'cliente_pago';
+    upsertLeadRecord(merged, {
+      memberName: asm.memberName,
+      email: asm.email,
+      whatsapp: asm.input?.whatsapp,
+      sex: asm.input?.sex,
+      age: asm.input?.age,
+      weightKg: asm.input?.weightKg,
+      heightCm: asm.input?.heightCm,
+      targetWeightKg: asm.input?.targetWeightKg,
+      primaryBarrier: asm.input?.freePrimaryBarrier,
+      stage,
+      orderId: asm.orderId,
+      totalAmountBrl: asm.totalAmountBrl ?? (asm.includeChaFit21D ? 95.8 : 67.9),
+      timestamp: asm.submittedAt
+    });
+  }
+
+  for (const eml of state.emailOutbox || []) {
+    if (eml.templateKey === 'free_mapping_summary') {
+      upsertLeadRecord(merged, {
+        memberName: eml.memberName,
+        email: eml.recipientEmail,
+        stage: 'lead_gratuito'
+      });
+    }
+  }
+
+  return merged.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+}
+
   app.get('/api/admin/state', requireAdmin, async (_req, res) => {
     const state = await loadStore();
-    res.json(state);
+    res.json({
+      ...state,
+      leads: buildSyncedLeads(state)
+    });
   });
 
   app.post('/api/gtm-event', async (req, res) => {
@@ -374,16 +735,50 @@ export function createApiApp(): express.Express {
     }
 
     const state = await loadStore();
+    if (!state.leads) state.leads = [];
+    upsertLeadRecord(state.leads, {
+      memberName: data.memberName,
+      email: data.email,
+      whatsapp: data.whatsapp || '',
+      sex: data.sex,
+      age: data.age,
+      weightKg: data.weightKg,
+      heightCm: data.heightCm,
+      targetWeightKg: data.targetWeightKg ?? data.weightKg,
+      primaryBarrier: data.freePrimaryBarrier,
+      stage: 'lead_gratuito'
+    });
     recordSanitizedGtmEvent(state, 'free_mapping_completed', {
       journey_type: data.journeyType,
       contact_channel: 'email_and_whatsapp',
       pii_omitted: true
     });
+    const baseUrl = resolvePublicBaseUrl(req);
+    const waterIntakeLiters =
+      typeof req.body?.waterIntakeLiters === 'number' && Number.isFinite(req.body.waterIntakeLiters)
+        ? req.body.waterIntakeLiters
+        : 1.5;
+    const exerciseMinutesPerWeek =
+      typeof req.body?.exerciseMinutesPerWeek === 'number' &&
+      Number.isFinite(req.body.exerciseMinutesPerWeek)
+        ? req.body.exerciseMinutesPerWeek
+        : 90;
+
     await enqueueIdempotentEmail(state, {
       idempotencyKey: `free_map:${data.email}:${Date.now()}`,
       recipientEmail: data.email,
       memberName: data.memberName,
-      templateKey: 'free_mapping_summary'
+      templateKey: 'free_mapping_summary',
+      extraHtml: buildFreeMappingEmailHtml({
+        weightKg: data.weightKg,
+        targetWeightKg: data.targetWeightKg ?? data.weightKg,
+        age: data.age,
+        heightCm: data.heightCm,
+        sex: data.sex,
+        waterIntakeLiters,
+        exerciseMinutesPerWeek,
+        baseUrl
+      })
     });
     await saveStore(state);
     res.json({ ok: true });
@@ -1179,12 +1574,14 @@ export function createApiApp(): express.Express {
         assessmentNumber
       });
     } else if (!evaluation.emergencyRedirect) {
+      const baseUrl = resolvePublicBaseUrl(req);
       await enqueueIdempotentEmail(state, {
         idempotencyKey: `${newId}:plan_delivered`,
         recipientEmail: input.email,
         memberName: input.memberName,
         templateKey: 'plan_delivered',
-        assessmentNumber
+        assessmentNumber,
+        extraHtml: buildPlanDeliveredEmailHtml(record, baseUrl)
       });
     }
 
@@ -1299,12 +1696,14 @@ export function createApiApp(): express.Express {
       }
     };
 
+    const baseUrl = resolvePublicBaseUrl(req);
     await enqueueIdempotentEmail(state, {
       idempotencyKey: `${target.id}:plan_delivered_manual`,
       recipientEmail: target.email,
       memberName: target.memberName,
       templateKey: 'plan_delivered',
-      assessmentNumber: target.assessmentNumber
+      assessmentNumber: target.assessmentNumber,
+      extraHtml: buildPlanDeliveredEmailHtml(target, baseUrl)
     });
 
     await saveStore(state);

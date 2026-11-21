@@ -7,7 +7,8 @@ import type {
   AssessmentInput,
   AssessmentRecord,
   EmailOutboxItem,
-  GtmAuditEvent
+  GtmAuditEvent,
+  LeadRecord
 } from '../shared/types.js';
 
 const { Pool } = pg;
@@ -34,6 +35,7 @@ export interface StoreState {
   emailOutbox: EmailOutboxItem[];
   gtmEvents: GtmAuditEvent[];
   drafts: Record<string, OrderDraft>;
+  leads: LeadRecord[];
 }
 
 const STORE_ROW_KEY = 'emagreslim_main_store';
@@ -140,7 +142,8 @@ export function createInitialState(): StoreState {
         audit: 'OK — Conformidade LGPD/GTM-5THGKLB4 validada'
       }
     ],
-    drafts: {}
+    drafts: {},
+    leads: []
   };
 }
 
@@ -159,7 +162,8 @@ export async function loadStore(): Promise<StoreState> {
           assessments: parsed.assessments || [],
           emailOutbox: parsed.emailOutbox || [],
           gtmEvents: parsed.gtmEvents || [],
-          drafts: parsed.drafts || {}
+          drafts: parsed.drafts || {},
+          leads: parsed.leads || []
         };
       }
       const initial = createInitialState();
@@ -185,7 +189,8 @@ export async function loadStore(): Promise<StoreState> {
       assessments: parsed.assessments || [],
       emailOutbox: parsed.emailOutbox || [],
       gtmEvents: parsed.gtmEvents || [],
-      drafts: parsed.drafts || {}
+      drafts: parsed.drafts || {},
+      leads: parsed.leads || []
     };
   } catch {
     return createInitialState();
