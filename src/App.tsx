@@ -25,6 +25,20 @@ interface AdminServerState {
 
 const ADMIN_TOKEN_KEY = 'emagreslim_admin_token';
 const PENDING_DRAFT_KEY = 'emagreslim_pending_draft';
+const PENDING_EVALUATION_KEY = 'emagreslim_pending_evaluation';
+const PURCHASE_FIRED_PREFIX = 'emagreslim_purchase_fired_';
+
+function markPurchaseFiredOnce(key: string): boolean {
+  if (typeof window === 'undefined') return true;
+  const storageKey = `${PURCHASE_FIRED_PREFIX}${key}`;
+  try {
+    if (sessionStorage.getItem(storageKey)) return false;
+    sessionStorage.setItem(storageKey, '1');
+    return true;
+  } catch {
+    return true;
+  }
+}
 
 const BLANK_ASSESSMENT_INPUT: AssessmentInput = {
   ...PRESET_SCENARIOS.preset_a_eligible.data,
@@ -80,6 +94,8 @@ export default function App() {
   const [formData, setFormData] = useState<AssessmentInput>(BLANK_ASSESSMENT_INPUT);
   const [isEmailVerified, setIsEmailVerified] = useState(false);
   const [orderId, setOrderId] = useState('ORD-2026-8841');
+  const [includeChaFit21D, setIncludeChaFit21D] = useState(false);
+  const [paidTotalBrl, setPaidTotalBrl] = useState(67.9);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Registro exclusivo do usuário atual na jornada pública
@@ -139,18 +155,85 @@ export default function App() {
     }
   }, [adminToken, fetchAdminState]);
 
-  // Verifica retorno do Mercado Pago na URL (?mp_status=approved&order_id=...&payment_id=...)
+  // Verifica retorno do Mercado Pago na URL (?mp_status=... ou ?mp_upsell_status=...)
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
+    const mpUpsellStatus = params.get('mp_upsell_status');
     const mpStatus = params.get('mp_status') || params.get('status');
     const returnedOrderId = params.get('order_id') || params.get('external_reference');
+    const returnedAssessmentId = params.get('assessment_id') || '';
     const paymentId = params.get('payment_id') || params.get('collection_id') || '';
 
     if (!returnedOrderId) return;
 
     const cleanUrl = window.location.pathname;
     window.history.replaceState({}, '', cleanUrl);
+
+    // Retorno do Upsell Pós-Compra (CháFit 21D)
+    if (mpUpsellStatus) {
+      try {
+        const rawEval = localStorage.getItem(PENDING_EVALUATION_KEY);
+        if (rawEval) {
+          const parsedEval = JSON.parse(rawEval) as AssessmentRecord;
+          setOwnEvaluation(parsedEval);
+          setFormData(parsedEval.input);
+          setOrderId(parsedEval.orderId);
+          setJourneyStep('paid_deliverables');
+        }
+      } catch {
+        // Ignora caso localStorage esteja vazio
+      }
+
+      if (mpUpsellStatus === 'failure' || mpUpsellStatus === 'rejected') {
+        showToast('Pagamento do CháFit 21D não concluído. Seu plano alimentar continua normalmente liberado.', 'error');
+        return;
+      }
+
+      setIsLoadingState(true);
+      fetch(
+        `/api/checkout/upsell-verify?orderId=${encodeURIComponent(
+          returnedOrderId
+        )}&assessmentId=${encodeURIComponent(returnedAssessmentId)}&paymentId=${encodeURIComponent(
+          paymentId
+        )}`
+      )
+        .then(async res => {
+          const data = await res.json();
+          if (res.ok && data.approved) {
+            setIncludeChaFit21D(true);
+            setPaidTotalBrl(95.8);
+            if (data.record) {
+              setOwnEvaluation(data.record);
+              setFormData(data.record.input);
+              setOrderId(data.record.orderId);
+            } else {
+              setOwnEvaluation(prev => (prev ? { ...prev, includeChaFit21D: true, totalAmountBrl: 95.8 } : prev));
+            }
+            setJourneyStep('paid_deliverables');
+            if (markPurchaseFiredOnce(`${returnedOrderId}:chafit`)) {
+              pushDataLayerEvent('upsell_chafit_purchased', {
+                transaction_id: `${returnedOrderId}:CHAFIT`,
+                value: 27.9,
+                currency: 'BRL'
+              });
+            }
+            localStorage.removeItem(PENDING_EVALUATION_KEY);
+            showToast('CháFit 21D liberado! Seu download em PDF já está disponível abaixo.');
+          } else if (mpUpsellStatus === 'pending') {
+            showToast('Pagamento do CháFit 21D pendente no Mercado Pago. Assim que compensar, o PDF será liberado.', 'error');
+          } else {
+            showToast('Aguardando confirmação do pagamento do CháFit 21D.', 'error');
+          }
+        })
+        .catch(() => {
+          showToast('Erro ao validar retorno do pagamento complementar.', 'error');
+        })
+        .finally(() => {
+          setIsLoadingState(false);
+        });
+      return;
+    }
 
     if (mpStatus === 'failure' || mpStatus === 'rejected') {
       showToast('Pagamento não concluído no Mercado Pago. Você pode tentar novamente.', 'error');
@@ -183,16 +266,27 @@ export default function App() {
           if (data.formData) {
             setFormData(data.formData);
           }
+          const withChaFit = Boolean(data.includeChaFit21D);
+          const totalVal = typeof data.totalAmountBrl === 'number' ? data.totalAmountBrl : withChaFit ? 95.8 : 67.9;
           setOrderId(data.orderId);
+          setIncludeChaFit21D(withChaFit);
+          setPaidTotalBrl(totalVal);
           setIsEmailVerified(Boolean(data.emailConfirmed));
           setJourneyStep('checkout_auth');
-          pushDataLayerEvent('purchase', {
-            transaction_id: data.orderId,
-            value: 67.9,
-            currency: 'BRL'
-          });
+          if (markPurchaseFiredOnce(data.orderId)) {
+            pushDataLayerEvent('purchase', {
+              transaction_id: data.orderId,
+              value: totalVal,
+              currency: 'BRL',
+              include_chafit_21d: withChaFit
+            });
+          }
           localStorage.removeItem(PENDING_DRAFT_KEY);
-          showToast(`Pagamento confirmado no Mercado Pago! Pedido ${data.orderId}.`);
+          showToast(
+            withChaFit
+              ? `Pagamento confirmado! Pedido ${data.orderId} (Plano + CháFit 21D).`
+              : `Pagamento confirmado no Mercado Pago! Pedido ${data.orderId}.`
+          );
         } else if (mpStatus === 'pending') {
           setOrderId(returnedOrderId);
           showToast(
@@ -333,9 +427,14 @@ export default function App() {
     }
   };
 
-  const handleApproveCheckout = async () => {
+  const handleApproveCheckout = async (withChaFit21D: boolean) => {
     setIsSubmitting(true);
-    pushDataLayerEvent('begin_checkout', { value: 67.9, currency: 'BRL' });
+    const expectedTotal = withChaFit21D ? 95.8 : 67.9;
+    pushDataLayerEvent('begin_checkout', {
+      value: expectedTotal,
+      currency: 'BRL',
+      include_chafit_21d: withChaFit21D
+    });
 
     try {
       localStorage.setItem(PENDING_DRAFT_KEY, JSON.stringify(formData));
@@ -350,6 +449,7 @@ export default function App() {
         body: JSON.stringify({
           email: formData.email,
           memberName: formData.memberName,
+          includeChaFit21D: withChaFit21D,
           formData
         })
       });
@@ -364,21 +464,116 @@ export default function App() {
         return;
       }
 
+      const confirmedChaFit = Boolean(data.includeChaFit21D);
+      const confirmedTotal =
+        typeof data.totalAmountBrl === 'number' ? data.totalAmountBrl : expectedTotal;
       setOrderId(data.orderId);
+      setIncludeChaFit21D(confirmedChaFit);
+      setPaidTotalBrl(confirmedTotal);
       setIsEmailVerified(false);
       setFormData(prev => ({ ...prev, emailConfirmed: false }));
       setJourneyStep('checkout_auth');
-      pushDataLayerEvent('purchase', {
-        transaction_id: data.orderId,
-        value: 67.9,
-        currency: 'BRL'
-      });
-      showToast(`Pedido ${data.orderId} aprovado. Confirme seu e-mail para continuar.`);
+      if (markPurchaseFiredOnce(data.orderId)) {
+        pushDataLayerEvent('purchase', {
+          transaction_id: data.orderId,
+          value: confirmedTotal,
+          currency: 'BRL',
+          include_chafit_21d: confirmedChaFit
+        });
+      }
+      showToast(
+        confirmedChaFit
+          ? `Pedido ${data.orderId} aprovado (Plano + CháFit 21D). Confirme seu e-mail para continuar.`
+          : `Pedido ${data.orderId} aprovado. Confirme seu e-mail para continuar.`
+      );
       if (adminToken) fetchAdminState(adminToken);
     } catch {
       showToast('Erro de conexão durante o checkout.', 'error');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handlePurchaseChaFitUpsell = async (targetOrderId: string, assessmentId?: string) => {
+    setIsSubmitting(true);
+    pushDataLayerEvent('begin_upsell_chafit', {
+      order_id: targetOrderId,
+      value: 27.9,
+      currency: 'BRL'
+    });
+
+    if (currentEvaluation) {
+      try {
+        localStorage.setItem(PENDING_EVALUATION_KEY, JSON.stringify(currentEvaluation));
+      } catch {
+        // Ignora caso storage privado esteja bloqueado
+      }
+    }
+
+    try {
+      const res = await fetch('/api/checkout/upsell-chafit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId: targetOrderId, assessmentId })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'Erro ao iniciar pagamento do CháFit 21D.', 'error');
+        return;
+      }
+
+      if (data.mode === 'mercadopago' && data.checkoutUrl) {
+        window.location.href = data.checkoutUrl;
+        return;
+      }
+
+      setIncludeChaFit21D(true);
+      setPaidTotalBrl(95.8);
+      if (data.record) {
+        setOwnEvaluation(data.record);
+      } else {
+        setOwnEvaluation(prev =>
+          prev ? { ...prev, includeChaFit21D: true, totalAmountBrl: 95.8 } : prev
+        );
+      }
+      if (markPurchaseFiredOnce(`${targetOrderId}:chafit`)) {
+        pushDataLayerEvent('upsell_chafit_purchased', {
+          transaction_id: `${targetOrderId}:CHAFIT`,
+          value: 27.9,
+          currency: 'BRL'
+        });
+      }
+      showToast('CháFit 21D adicionado com sucesso! Você já pode baixar o PDF.');
+      if (adminToken) fetchAdminState(adminToken);
+    } catch {
+      showToast('Erro de conexão ao adicionar o CháFit 21D.', 'error');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDownloadChaFitEbook = async (targetOrderId: string, assessmentId?: string) => {
+    try {
+      const res = await fetch(
+        `/api/ebooks/chafit-21d/access?orderId=${encodeURIComponent(
+          targetOrderId
+        )}&assessmentId=${encodeURIComponent(assessmentId || '')}`
+      );
+      const data = await res.json();
+      if (!res.ok || !data.allowed || !data.downloadUrl) {
+        showToast(data.error || 'O e-book CháFit 21D ainda não está liberado para este pedido.', 'error');
+        return;
+      }
+
+      const link = document.createElement('a');
+      link.href = data.downloadUrl;
+      link.download = data.fileName || 'EmagreSLIM_ChaFit_21D.pdf';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      showToast('Download do e-book CháFit 21D iniciado.');
+    } catch {
+      showToast('Erro ao validar o download do e-book CháFit 21D.', 'error');
     }
   };
 
@@ -656,10 +851,14 @@ export default function App() {
                 isEmailVerified={isEmailVerified}
                 setIsEmailVerified={setIsEmailVerified}
                 orderId={orderId}
+                includeChaFit21D={includeChaFit21D}
+                paidTotalBrl={paidTotalBrl}
                 currentEvaluation={currentEvaluation}
                 onLoadPreset={handleLoadPreset}
                 onCompleteFreeMapping={handleCompleteFreeMapping}
                 onApproveCheckout={handleApproveCheckout}
+                onPurchaseChaFitUpsell={handlePurchaseChaFitUpsell}
+                onDownloadChaFitEbook={handleDownloadChaFitEbook}
                 onVerifyEmail={handleVerifyEmail}
                 onSubmitFullAssessment={handleSubmitFullAssessment}
                 onConfirmPan={handleConfirmPan}
@@ -676,6 +875,8 @@ export default function App() {
                 onNewFreeQuizSession={() => {
                   setPaidBlock(1);
                   setOwnEvaluation(null);
+                  setIncludeChaFit21D(false);
+                  setPaidTotalBrl(67.9);
                   setFormData({ ...BLANK_ASSESSMENT_INPUT });
                   setFreeQuizSessionKey(k => k + 1);
                 }}
