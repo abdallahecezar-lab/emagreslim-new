@@ -1,4 +1,4 @@
-import type { AssessmentInput, EmailTemplateKey, FoodCatalogItem } from './types';
+import type { AssessmentInput, EmailTemplateKey, FoodCatalogItem } from './types.js';
 
 /**
  * ============================================================================

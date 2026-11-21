@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CURATED_FOOD_CATALOG } from './catalog';
+import { CURATED_FOOD_CATALOG } from './catalog.js';
 import type {
   AggravationTrigger,
   AssessmentInput,
@@ -10,7 +10,7 @@ import type {
   MealSlot,
   PanDocument,
   SubstitutionGroup
-} from './types';
+} from './types.js';
 
 export const FreeMappingSchema = z.object({
   journeyType: z.enum(['new_profile', 'reassessment']),
