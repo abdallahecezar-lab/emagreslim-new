@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Activity,
   AlertCircle,
@@ -23,6 +23,7 @@ import {
   UNUSUAL_DATA_LOCK_MESSAGE
 } from '../shared/clinicalEngine';
 import type { AssessmentInput } from '../shared/types';
+import { pushDataLayerEvent } from '../utils/analytics';
 import { exportFreeMappingPdf } from '../utils/pdfExport';
 import { WaterCupIllustration } from './PortionIllustration';
 
@@ -51,6 +52,23 @@ const PROGRESS_BY_STEP: Record<number, number> = {
   12: 86,
   13: 93,
   14: 100
+};
+
+const STEP_NAME_BY_NUMBER: Record<number, string> = {
+  1: 'primeira_vez',
+  2: 'nome',
+  3: 'data_nascimento',
+  4: 'sexo',
+  5: 'altura',
+  6: 'peso_atual',
+  7: 'peso_meta',
+  8: 'rotina_diaria',
+  9: 'frequencia_exercicio',
+  10: 'tentativas_anteriores',
+  11: 'maior_dificuldade',
+  12: 'consumo_agua',
+  13: 'triagem_seguranca',
+  14: 'contato_whatsapp_email'
 };
 
 const DIFFICULTY_OPTIONS = [
@@ -179,6 +197,21 @@ export const FreeAssessmentInteractive: React.FC<FreeAssessmentInteractiveProps>
   const [contactConfirmSending, setContactConfirmSending] = useState(false);
   const [contactConfirmDone, setContactConfirmDone] = useState(false);
   const [contactConfirmError, setContactConfirmError] = useState<string | null>(null);
+
+  const trackedStepsRef = useRef<Set<number>>(new Set());
+
+  useEffect(() => {
+    if (trackedStepsRef.current.has(step)) return;
+    trackedStepsRef.current.add(step);
+    pushDataLayerEvent('free_mapping_step', {
+      step_number: step,
+      step_key: `step_${String(step).padStart(2, '0')}`,
+      step_name: STEP_NAME_BY_NUMBER[step] ?? `step_${step}`,
+      total_steps: 14,
+      progress_percent: progressPercent,
+      funnel_stage: step <= 4 ? 'inicio_quiz' : step <= 10 ? 'meio_quiz' : 'final_quiz'
+    });
+  }, [step, progressPercent]);
 
   const goToStep = (nextStep: number) => {
     setStepError(null);
