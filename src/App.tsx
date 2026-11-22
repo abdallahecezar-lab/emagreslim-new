@@ -16,7 +16,11 @@ import type {
   GtmAuditEvent,
   LeadRecord
 } from './shared/types';
-import { pushDataLayerEvent } from './utils/analytics';
+import {
+  createMetaEventId,
+  getMetaBrowserContext,
+  pushDataLayerEvent
+} from './utils/analytics';
 import emagreslimLogo from './assets/images/emagreslim-logo.png';
 
 interface AdminServerState {
@@ -218,6 +222,7 @@ export default function App() {
             setJourneyStep('paid_deliverables');
             if (markPurchaseFiredOnce(`${returnedOrderId}:chafit`)) {
               pushDataLayerEvent('upsell_chafit_purchased', {
+                event_id: `upsell_chafit_${returnedOrderId}`,
                 transaction_id: `${returnedOrderId}:CHAFIT`,
                 value: 27.9,
                 currency: 'BRL'
@@ -280,6 +285,7 @@ export default function App() {
           setJourneyStep('checkout_auth');
           if (markPurchaseFiredOnce(data.orderId)) {
             pushDataLayerEvent('purchase', {
+              event_id: `purchase_${data.orderId}`,
               transaction_id: data.orderId,
               value: totalVal,
               currency: 'BRL',
@@ -397,6 +403,8 @@ export default function App() {
       return;
     }
     setIsSubmitting(true);
+    const leadEventId = createMetaEventId('lead');
+    const metaTracking = getMetaBrowserContext();
     try {
       const res = await fetch('/api/free-mapping', {
         method: 'POST',
@@ -413,7 +421,9 @@ export default function App() {
           targetWeightKg: formData.targetWeightKg,
           freePrimaryBarrier: formData.freePrimaryBarrier,
           waterIntakeLiters: formData.waterIntakeLiters,
-          exerciseMinutesPerWeek: formData.exerciseMinutesPerWeek
+          exerciseMinutesPerWeek: formData.exerciseMinutesPerWeek,
+          metaEventId: leadEventId,
+          metaTracking
         })
       });
       const data = await res.json();
@@ -422,6 +432,7 @@ export default function App() {
         return;
       }
       pushDataLayerEvent('free_mapping_completed', {
+        event_id: leadEventId,
         journey_type: formData.journeyType
       });
       setJourneyStep('free_result');
@@ -437,7 +448,10 @@ export default function App() {
   const handleApproveCheckout = async (withChaFit21D: boolean) => {
     setIsSubmitting(true);
     const expectedTotal = withChaFit21D ? 95.8 : 67.9;
+    const checkoutEventId = createMetaEventId('ic');
+    const metaTracking = getMetaBrowserContext();
     pushDataLayerEvent('begin_checkout', {
+      event_id: checkoutEventId,
       value: expectedTotal,
       currency: 'BRL',
       include_chafit_21d: withChaFit21D
@@ -457,7 +471,9 @@ export default function App() {
           email: formData.email,
           memberName: formData.memberName,
           includeChaFit21D: withChaFit21D,
-          formData
+          formData,
+          metaEventId: checkoutEventId,
+          metaTracking
         })
       });
       const data = await res.json();
@@ -482,6 +498,7 @@ export default function App() {
       setJourneyStep('checkout_auth');
       if (markPurchaseFiredOnce(data.orderId)) {
         pushDataLayerEvent('purchase', {
+          event_id: `purchase_${data.orderId}`,
           transaction_id: data.orderId,
           value: confirmedTotal,
           currency: 'BRL',
@@ -545,6 +562,7 @@ export default function App() {
       }
       if (markPurchaseFiredOnce(`${targetOrderId}:chafit`)) {
         pushDataLayerEvent('upsell_chafit_purchased', {
+          event_id: `upsell_chafit_${targetOrderId}`,
           transaction_id: `${targetOrderId}:CHAFIT`,
           value: 27.9,
           currency: 'BRL'
