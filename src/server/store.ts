@@ -26,6 +26,13 @@ export interface OrderDraft {
   upsellPaymentStatus?: 'none' | 'pending' | 'approved' | 'rejected';
   upsellMpPreferenceId?: string;
   upsellMpPaymentId?: string;
+  fbp?: string;
+  fbc?: string;
+  clientIp?: string;
+  clientUserAgent?: string;
+  eventSourceUrl?: string;
+  metaPurchaseSent?: boolean;
+  metaUpsellSent?: boolean;
   formData?: AssessmentInput;
   updatedAt: string;
 }

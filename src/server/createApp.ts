@@ -456,6 +456,202 @@ function recordSanitizedGtmEvent(
   return ev;
 }
 
+function isMetaCapiConfigured(): boolean {
+  return Boolean(
+    process.env.META_PIXEL_ID?.trim() && process.env.META_CAPI_ACCESS_TOKEN?.trim()
+  );
+}
+
+function sha256Meta(value: string): string {
+  return crypto.createHash('sha256').update(value.trim().toLowerCase()).digest('hex');
+}
+
+function normalizeBrazilPhoneForMeta(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 10) return undefined;
+  const normalized = digits.startsWith('55') && digits.length >= 12 ? digits : `55${digits}`;
+  return sha256Meta(normalized);
+}
+
+function extractClientIp(req: express.Request): string | undefined {
+  const fwd = req.headers['x-forwarded-for'];
+  if (typeof fwd === 'string' && fwd.trim()) {
+    return fwd.split(',')[0].trim();
+  }
+  if (Array.isArray(fwd) && fwd[0]) {
+    return fwd[0].split(',')[0].trim();
+  }
+  return req.ip || undefined;
+}
+
+function extractMetaTrackingFromBody(req: express.Request): {
+  fbp?: string;
+  fbc?: string;
+  eventSourceUrl?: string;
+  metaEventId?: string;
+  clientIp?: string;
+  clientUserAgent?: string;
+} {
+  const mt =
+    typeof req.body?.metaTracking === 'object' && req.body.metaTracking !== null
+      ? (req.body.metaTracking as Record<string, unknown>)
+      : {};
+  const fbp = typeof mt.fbp === 'string' && mt.fbp.trim() ? mt.fbp.trim().slice(0, 120) : undefined;
+  const fbc = typeof mt.fbc === 'string' && mt.fbc.trim() ? mt.fbc.trim().slice(0, 200) : undefined;
+  const eventSourceUrl =
+    typeof mt.eventSourceUrl === 'string' && mt.eventSourceUrl.startsWith('http')
+      ? mt.eventSourceUrl.slice(0, 500)
+      : undefined;
+  const metaEventId =
+    typeof req.body?.metaEventId === 'string' && req.body.metaEventId.trim()
+      ? req.body.metaEventId.trim().slice(0, 120)
+      : undefined;
+  const clientIp = extractClientIp(req);
+  const ua = req.headers['user-agent'];
+  const clientUserAgent = typeof ua === 'string' ? ua.slice(0, 300) : undefined;
+  return { fbp, fbc, eventSourceUrl, metaEventId, clientIp, clientUserAgent };
+}
+
+async function sendMetaCapiEvent(
+  state: StoreState,
+  params: {
+    eventName: 'Lead' | 'InitiateCheckout' | 'Purchase';
+    eventId: string;
+    email?: string;
+    phone?: string;
+    memberName?: string;
+    fbp?: string;
+    fbc?: string;
+    clientIp?: string;
+    clientUserAgent?: string;
+    eventSourceUrl?: string;
+    value?: number;
+    contentName?: string;
+    contentIds?: string[];
+    orderId?: string;
+  }
+): Promise<void> {
+  const pixelId = process.env.META_PIXEL_ID?.trim();
+  const accessToken = process.env.META_CAPI_ACCESS_TOKEN?.trim();
+  if (!pixelId || !accessToken) return;
+
+  const userData: Record<string, unknown> = {
+    country: [sha256Meta('br')]
+  };
+  if (params.email && params.email.includes('@')) {
+    userData.em = [sha256Meta(params.email)];
+  }
+  const hashedPhone = normalizeBrazilPhoneForMeta(params.phone);
+  if (hashedPhone) {
+    userData.ph = [hashedPhone];
+  }
+  const firstName = params.memberName?.trim().split(/\s+/)[0];
+  if (firstName && firstName.length >= 2) {
+    userData.fn = [sha256Meta(firstName)];
+  }
+  if (params.clientIp) {
+    userData.client_ip_address = params.clientIp;
+  }
+  if (params.clientUserAgent) {
+    userData.client_user_agent = params.clientUserAgent;
+  }
+  if (params.fbp) {
+    userData.fbp = params.fbp;
+  }
+  if (params.fbc) {
+    userData.fbc = params.fbc;
+  }
+
+  // Envia apenas metadados comerciais limpos (nunca dados clínicos ou de saúde)
+  const customData: Record<string, unknown> = {};
+  if (typeof params.value === 'number' && Number.isFinite(params.value)) {
+    customData.currency = 'BRL';
+    customData.value = Number(params.value.toFixed(2));
+  }
+  if (params.contentName) {
+    customData.content_name = params.contentName;
+  }
+  if (params.contentIds && params.contentIds.length > 0) {
+    customData.content_ids = params.contentIds;
+    customData.content_type = 'product';
+  }
+  if (params.orderId) {
+    customData.order_id = params.orderId;
+  }
+
+  const testEventCode = process.env.META_CAPI_TEST_EVENT_CODE?.trim();
+  const bodyPayload: Record<string, unknown> = {
+    data: [
+      {
+        event_name: params.eventName,
+        event_time: Math.floor(Date.now() / 1000),
+        event_id: params.eventId,
+        action_source: 'website',
+        event_source_url: params.eventSourceUrl || 'https://www.emagreslim.com.br/',
+        user_data: userData,
+        ...(Object.keys(customData).length > 0 ? { custom_data: customData } : {})
+      }
+    ],
+    access_token: accessToken,
+    ...(testEventCode ? { test_event_code: testEventCode } : {})
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`https://graph.facebook.com/v21.0/${encodeURIComponent(pixelId)}/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bodyPayload),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+
+    const resJson = (await res.json().catch(() => ({}))) as {
+      events_received?: number;
+      error?: { message?: string };
+    };
+
+    const ev: GtmAuditEvent = {
+      id: `CAPI-${String(state.gtmEvents.length + 1).padStart(3, '0')}`,
+      time: new Date().toLocaleTimeString('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      }),
+      eventName: `meta_capi_${params.eventName.toLowerCase()}`,
+      payload: JSON.stringify({
+        event_name: params.eventName,
+        event_id: params.eventId,
+        ...(typeof params.value === 'number' ? { value: params.value, currency: 'BRL' } : {}),
+        ...(testEventCode ? { test_mode: true } : {}),
+        pii_hashed_sha256: true,
+        clinical_status: 'STRIPPED_BY_LGPD_POLICY'
+      }),
+      audit: res.ok
+        ? `OK — Meta CAPI enviado (events_received: ${resJson.events_received ?? 1})`
+        : `Falha Meta CAPI (HTTP ${res.status}: ${(resJson.error?.message || 'verificar token/pixel').slice(0, 120)})`
+    };
+    state.gtmEvents.unshift(ev);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'erro de rede';
+    console.error('Meta CAPI error:', msg);
+    const ev: GtmAuditEvent = {
+      id: `CAPI-${String(state.gtmEvents.length + 1).padStart(3, '0')}`,
+      time: new Date().toLocaleTimeString('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      }),
+      eventName: `meta_capi_${params.eventName.toLowerCase()}`,
+      payload: JSON.stringify({ event_name: params.eventName, event_id: params.eventId }),
+      audit: `Falha Meta CAPI (${msg.slice(0, 120)})`
+    };
+    state.gtmEvents.unshift(ev);
+  }
+}
+
 async function fetchMercadoPagoPaymentStatus(params: {
   accessToken: string;
   paymentId?: string;
@@ -533,7 +729,8 @@ export function createApiApp(): express.Express {
       databaseConfigured: Boolean(getDatabaseUrl()),
       smtpConfigured: isSmtpConfigured(),
       resendConfigured: Boolean(process.env.RESEND_API_KEY?.trim()),
-      emailConfigured: isEmailProviderConfigured()
+      emailConfigured: isEmailProviderConfigured(),
+      metaCapiConfigured: isMetaCapiConfigured()
     });
   });
 
@@ -780,6 +977,23 @@ function buildSyncedLeads(state: StoreState): LeadRecord[] {
         baseUrl
       })
     });
+
+    const metaCtx = extractMetaTrackingFromBody(req);
+    await sendMetaCapiEvent(state, {
+      eventName: 'Lead',
+      eventId: metaCtx.metaEventId || `lead_${Date.now()}`,
+      email: data.email,
+      phone: data.whatsapp,
+      memberName: data.memberName,
+      fbp: metaCtx.fbp,
+      fbc: metaCtx.fbc,
+      clientIp: metaCtx.clientIp,
+      clientUserAgent: metaCtx.clientUserAgent,
+      eventSourceUrl: metaCtx.eventSourceUrl || `${baseUrl}/`,
+      contentName: 'Avaliacao Gratuita EmagreSLIM',
+      contentIds: ['emagreslim-avaliacao-gratuita']
+    });
+
     await saveStore(state);
     res.json({ ok: true });
   });
@@ -850,6 +1064,11 @@ function buildSyncedLeads(state: StoreState): LeadRecord[] {
       });
     }
 
+    const metaCtx = extractMetaTrackingFromBody(req);
+    const checkoutContentIds = includeChaFit21D
+      ? ['emagreslim-avaliacao-completa', 'emagreslim-chafit-21d']
+      : ['emagreslim-avaliacao-completa'];
+
     if (mpToken) {
       const baseUrl = resolvePublicBaseUrl(req);
       try {
@@ -901,6 +1120,13 @@ function buildSyncedLeads(state: StoreState): LeadRecord[] {
           totalAmountBrl,
           upsellPaymentStatus: includeChaFit21D ? 'none' : 'none',
           mpPreferenceId: mpData.id,
+          fbp: metaCtx.fbp,
+          fbc: metaCtx.fbc,
+          clientIp: metaCtx.clientIp,
+          clientUserAgent: metaCtx.clientUserAgent,
+          eventSourceUrl: metaCtx.eventSourceUrl || `${baseUrl}/`,
+          metaPurchaseSent: false,
+          metaUpsellSent: false,
           formData,
           updatedAt: new Date().toISOString()
         };
@@ -910,6 +1136,24 @@ function buildSyncedLeads(state: StoreState): LeadRecord[] {
           gateway: 'mercadopago',
           amount_brl: totalAmountBrl,
           include_chafit_21d: includeChaFit21D
+        });
+        await sendMetaCapiEvent(state, {
+          eventName: 'InitiateCheckout',
+          eventId: metaCtx.metaEventId || `ic_${orderId}`,
+          email,
+          phone: formData?.whatsapp,
+          memberName,
+          fbp: metaCtx.fbp,
+          fbc: metaCtx.fbc,
+          clientIp: metaCtx.clientIp,
+          clientUserAgent: metaCtx.clientUserAgent,
+          eventSourceUrl: metaCtx.eventSourceUrl || `${baseUrl}/`,
+          value: totalAmountBrl,
+          contentName: includeChaFit21D
+            ? 'Plano EmagreSLIM + Guia ChaFit 21D'
+            : 'Plano EmagreSLIM Personalizado',
+          contentIds: checkoutContentIds,
+          orderId
         });
         await saveStore(state);
 
@@ -939,6 +1183,13 @@ function buildSyncedLeads(state: StoreState): LeadRecord[] {
       includeChaFit21D,
       totalAmountBrl,
       upsellPaymentStatus: 'none',
+      fbp: metaCtx.fbp,
+      fbc: metaCtx.fbc,
+      clientIp: metaCtx.clientIp,
+      clientUserAgent: metaCtx.clientUserAgent,
+      eventSourceUrl: metaCtx.eventSourceUrl,
+      metaPurchaseSent: true,
+      metaUpsellSent: false,
       formData,
       updatedAt: new Date().toISOString()
     };
@@ -955,6 +1206,24 @@ function buildSyncedLeads(state: StoreState): LeadRecord[] {
       memberName,
       templateKey: 'purchase_confirmed',
       assessmentNumber: 1
+    });
+    await sendMetaCapiEvent(state, {
+      eventName: 'Purchase',
+      eventId: `purchase_${orderId}`,
+      email,
+      phone: formData?.whatsapp,
+      memberName,
+      fbp: metaCtx.fbp,
+      fbc: metaCtx.fbc,
+      clientIp: metaCtx.clientIp,
+      clientUserAgent: metaCtx.clientUserAgent,
+      eventSourceUrl: metaCtx.eventSourceUrl,
+      value: totalAmountBrl,
+      contentName: includeChaFit21D
+        ? 'Plano EmagreSLIM + Guia ChaFit 21D'
+        : 'Plano EmagreSLIM Personalizado',
+      contentIds: checkoutContentIds,
+      orderId
     });
 
     await saveStore(state);
@@ -1033,6 +1302,31 @@ function buildSyncedLeads(state: StoreState): LeadRecord[] {
         templateKey: 'purchase_confirmed',
         assessmentNumber: 1
       });
+      if (!draft.metaPurchaseSent) {
+        draft.metaPurchaseSent = true;
+        await sendMetaCapiEvent(state, {
+          eventName: 'Purchase',
+          eventId: `purchase_${orderId}`,
+          email: draft.email,
+          phone: draft.formData?.whatsapp,
+          memberName: draft.memberName,
+          fbp: draft.fbp,
+          fbc: draft.fbc,
+          clientIp: draft.clientIp || extractClientIp(req),
+          clientUserAgent:
+            draft.clientUserAgent ||
+            (typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : undefined),
+          eventSourceUrl: draft.eventSourceUrl || `${resolvePublicBaseUrl(req)}/`,
+          value: totalAmountBrl,
+          contentName: includeChaFit21D
+            ? 'Plano EmagreSLIM + Guia ChaFit 21D'
+            : 'Plano EmagreSLIM Personalizado',
+          contentIds: includeChaFit21D
+            ? ['emagreslim-avaliacao-completa', 'emagreslim-chafit-21d']
+            : ['emagreslim-avaliacao-completa'],
+          orderId
+        });
+      }
       await saveStore(state);
 
       res.json({
@@ -1286,6 +1580,27 @@ function buildSyncedLeads(state: StoreState): LeadRecord[] {
         gateway: 'mercadopago',
         amount_brl: CHAFIT_PRICE_BRL
       });
+      if (!draft?.metaUpsellSent) {
+        if (draft) draft.metaUpsellSent = true;
+        await sendMetaCapiEvent(state, {
+          eventName: 'Purchase',
+          eventId: `upsell_chafit_${orderId}`,
+          email: draft?.email || assessment?.email,
+          phone: draft?.formData?.whatsapp || assessment?.input?.whatsapp,
+          memberName: draft?.memberName || assessment?.memberName,
+          fbp: draft?.fbp,
+          fbc: draft?.fbc,
+          clientIp: draft?.clientIp || extractClientIp(req),
+          clientUserAgent:
+            draft?.clientUserAgent ||
+            (typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : undefined),
+          eventSourceUrl: draft?.eventSourceUrl || `${resolvePublicBaseUrl(req)}/`,
+          value: CHAFIT_PRICE_BRL,
+          contentName: 'Guia Digital ChaFit 21D',
+          contentIds: ['emagreslim-chafit-21d'],
+          orderId: `${orderId}:CHAFIT`
+        });
+      }
       await saveStore(state);
 
       res.json({
@@ -1398,6 +1713,25 @@ function buildSyncedLeads(state: StoreState): LeadRecord[] {
                 gateway: 'mercadopago_webhook',
                 amount_brl: CHAFIT_PRICE_BRL
               });
+              if (!draft?.metaUpsellSent) {
+                if (draft) draft.metaUpsellSent = true;
+                await sendMetaCapiEvent(state, {
+                  eventName: 'Purchase',
+                  eventId: `upsell_chafit_${baseOrderId}`,
+                  email: draft?.email || assessment?.email,
+                  phone: draft?.formData?.whatsapp || assessment?.input?.whatsapp,
+                  memberName: draft?.memberName || assessment?.memberName,
+                  fbp: draft?.fbp,
+                  fbc: draft?.fbc,
+                  clientIp: draft?.clientIp,
+                  clientUserAgent: draft?.clientUserAgent,
+                  eventSourceUrl: draft?.eventSourceUrl,
+                  value: CHAFIT_PRICE_BRL,
+                  contentName: 'Guia Digital ChaFit 21D',
+                  contentIds: ['emagreslim-chafit-21d'],
+                  orderId: `${baseOrderId}:CHAFIT`
+                });
+              }
               await saveStore(state);
             }
           } else {
@@ -1426,6 +1760,29 @@ function buildSyncedLeads(state: StoreState): LeadRecord[] {
                 templateKey: 'purchase_confirmed',
                 assessmentNumber: 1
               });
+              if (!draft.metaPurchaseSent) {
+                draft.metaPurchaseSent = true;
+                await sendMetaCapiEvent(state, {
+                  eventName: 'Purchase',
+                  eventId: `purchase_${extRef}`,
+                  email: draft.email,
+                  phone: draft.formData?.whatsapp,
+                  memberName: draft.memberName,
+                  fbp: draft.fbp,
+                  fbc: draft.fbc,
+                  clientIp: draft.clientIp,
+                  clientUserAgent: draft.clientUserAgent,
+                  eventSourceUrl: draft.eventSourceUrl,
+                  value: totalAmountBrl,
+                  contentName: includeChaFit21D
+                    ? 'Plano EmagreSLIM + Guia ChaFit 21D'
+                    : 'Plano EmagreSLIM Personalizado',
+                  contentIds: includeChaFit21D
+                    ? ['emagreslim-avaliacao-completa', 'emagreslim-chafit-21d']
+                    : ['emagreslim-avaliacao-completa'],
+                  orderId: extRef
+                });
+              }
               await saveStore(state);
             }
           }
@@ -1449,6 +1806,7 @@ function buildSyncedLeads(state: StoreState): LeadRecord[] {
     if (orderId) {
       const prev = state.drafts[orderId];
       state.drafts[orderId] = {
+        ...prev,
         orderId,
         email,
         memberName: prev?.memberName || 'Membro',
@@ -1457,11 +1815,6 @@ function buildSyncedLeads(state: StoreState): LeadRecord[] {
         includeChaFit21D: prev?.includeChaFit21D ?? false,
         totalAmountBrl: prev?.totalAmountBrl ?? PLAN_PRICE_BRL,
         upsellPaymentStatus: prev?.upsellPaymentStatus ?? 'none',
-        upsellMpPreferenceId: prev?.upsellMpPreferenceId,
-        upsellMpPaymentId: prev?.upsellMpPaymentId,
-        mpPreferenceId: prev?.mpPreferenceId,
-        mpPaymentId: prev?.mpPaymentId,
-        formData: prev?.formData,
         updatedAt: new Date().toISOString()
       };
     }
